@@ -16,7 +16,7 @@
 
 ## 下载
 
-在 [Releases](https://github.com/KingPenguinMan/z-lib-android/releases) 下载适合设备的 APK。本项目首发版本提供 `arm64-v8a` 包，适用于大多数近年的 Android 手机和平板。
+在 [Releases](https://github.com/joaquinkers/z-lib-Android/releases) 下载适合设备的 APK。32 位 ARM 设备选 `armeabi-v7a`，64 位 ARM 手机选 `arm64-v8a`，x86_64 模拟器选 `x86_64`。
 
 ## 从源码构建
 
@@ -36,6 +36,8 @@ build/app/outputs/flutter-apk/app-release.apk
 
 如需生成其他架构，可将 `--target-platform` 改为 Flutter 支持的平台组合，例如 `android-arm,android-arm64,android-x64`。
 
+本地版本归档在 [releases/](releases/)。每次构建后，将安装包放在对应的 `releases/v版本号/` 目录，并在同一目录的 `更新说明.md` 中记录本版改动和支持的架构。最新归档可查看 [0.1.2 稳定版更新说明](releases/v0.1.2-stable/更新说明.md)。
+
 ## 下载位置
 
 Android 10 及以上版本通过系统媒体存储写入 `Download/Books`。Android 9 及更早版本首次下载时需要授予存储权限。用户选择自定义目录后，应用会使用该目录；可在应用的「我的 → 下载目录」中恢复默认位置。
@@ -49,3 +51,6 @@ Android 10 及以上版本通过系统媒体存储写入 `Download/Books`。Andr
 ## 许可证与致谢
 
 本仓库采用 MIT License。项目实现参考了 [heartleo/zlib](https://github.com/heartleo/zlib) 的接口交互方式；保留原项目许可证及版权声明。Flutter 依赖及其许可证信息可通过 `flutter pub deps` 查看。
+## 0.1.2 稳定版安装与预览
+
+从对应版本的本地归档安装。此版暂停启动更新检查。图书详情中的在线阅读支持 PDF 和文字 EPUB，将文件载入应用缓存后阅读，单个文件上限为 128 MB。我的收藏保存在设备本地。

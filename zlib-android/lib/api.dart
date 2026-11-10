@@ -186,8 +186,10 @@ class HttpTransport implements ApiTransport {
       throw const ApiException('连接超时，请检测线路或检查网络', retryable: true);
     } on SocketException {
       throw const ApiException('无法连接服务器，请检查网络或切换线路', retryable: true);
-    } on HandshakeException {
-      throw const ApiException('此线路的安全连接失败，请换一条线路', retryable: true);
+    } on HandshakeException catch (error) {
+      final certificateError = error.toString().toUpperCase().contains('CERTIFICATE_VERIFY_FAILED');
+      throw ApiException(certificateError ? '线路证书校验失败，请检查系统日期或更换线路' : 'TLS 握手未完成，请更换线路或网络后重新检测', retryable: true);
+
     } on HttpException {
       throw const ApiException('连接被中断，请重试或切换线路', retryable: true);
     }
@@ -265,11 +267,11 @@ class LibraryApi {
   Future<RouteInfo> probe(String origin) async {
     final result = RouteInfo(origin, status: RouteStatus.testing);
     final watch = Stopwatch()..start();
-    final probeApi = LibraryApi();
     try {
-      final response = await probeApi.transport.request(
+      final response = await transport.request(
         origin,
         '/eapi/info/domains',
+        timeout: const Duration(seconds: 8),
       );
       final data = decode(response, requireSuccess: false);
       if (data['domains'] == null && data['data'] == null) {
@@ -289,7 +291,6 @@ class LibraryApi {
     } finally {
       watch.stop();
       result.milliseconds = watch.elapsedMilliseconds;
-      probeApi.close();
     }
     return result;
   }

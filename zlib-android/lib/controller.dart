@@ -13,6 +13,8 @@ class ReaderController extends ChangeNotifier {
   ReaderController({LibraryApi? api, NativeBridge? native})
     : api = api ?? LibraryApi(),
       native = native ?? NativeBridge();
+  String version = '';
+  bool hideGroupInvite = false;
   bool ready = false, probing = false, automatic = true, searching = false;
   bool historyLoading = false, profileLoading = false;
   ThemeMode theme = ThemeMode.system;
@@ -38,16 +40,54 @@ class ReaderController extends ChangeNotifier {
   bool recommendationsLoading = false;
   int recommendationPage = 0, recommendationTotalPages = 1;
   bool recommendationHasMore = true;
+  final _hiddenHistory = <String, Set<String>>{};
+  BookPage? get visibleHistoryPage {
+    final page = historyPage;
+    final hidden = _hiddenHistory[session?.userId];
+    if (page == null || hidden == null || hidden.isEmpty) return page;
+    return BookPage(
+      page.books
+          .where(
+            (b) =>
+                !hidden.contains(b.downloadable ? b.ref : _historyIdentity(b)),
+          )
+          .toList(),
+      page.page,
+      page.totalPages,
+    );
+  }
+
+  Future<void> hideHistory(Book book) async {
+    final user = session?.userId;
+    if (user == null) return;
+    final hidden = _hiddenHistory.putIfAbsent(user, () => <String>{});
+    final key = book.downloadable ? book.ref : _historyIdentity(book);
+    if (!hidden.add(key)) return;
+    changed();
+    try {
+      await persist();
+    } catch (_) {
+      hidden.remove(key);
+      changed();
+      rethrow;
+    }
+  }
+
   Map<String, dynamic> _historyCache = {};
   Map<String, dynamic>? profileData;
   Timer? _timer;
   Future<void>? _probeFuture;
+  Completer<void>? _firstRoute;
   bool _disposed = false, _refreshingDownloads = false;
   final Set<String> resolvingDownloads = {};
   bool get loggedIn => session?.valid ?? false;
   String get host =>
       activeOrigin.isEmpty ? '尚未选择线路' : Uri.parse(activeOrigin).host;
-  int get healthyCount => routes.where((r) => r.usable).length;
+  int get healthyCount => routes
+      .where((r) => r.usable)
+      .map((r) => r.effectiveOrigin)
+      .toSet()
+      .length;
   int get activeDownloads => downloads.where((d) => d.active).length;
   bool get selectingDownloads => selectedDownloadIds.isNotEmpty;
   void changed() {
@@ -63,6 +103,8 @@ class ReaderController extends ChangeNotifier {
   Future<void> init() async {
     try {
       final settings = await native.loadSettings();
+      hideGroupInvite = settings['hideGroupInvite'] == true;
+      version = await native.appVersion();
       automatic = settings['automatic'] != false;
       final savedOrigin = textValue(settings['origin']);
       if (savedOrigin.isNotEmpty && trustedOrigin(Uri.parse(savedOrigin)))
@@ -81,6 +123,15 @@ class ReaderController extends ChangeNotifier {
           .toList();
       directory = await native.directoryLabel();
       session = await native.loadSession();
+      final hidden = settings['hiddenHistory'];
+      if (hidden is Map) {
+        for (final entry in hidden.entries) {
+          if (entry.key is String && entry.value is List)
+            _hiddenHistory[entry.key as String] = (entry.value as List)
+                .whereType<String>()
+                .toSet();
+        }
+      }
       final cached = settings['historyCache'];
       if (cached is Map) {
         _historyCache = Map<String, dynamic>.from(cached);
@@ -95,7 +146,8 @@ class ReaderController extends ChangeNotifier {
     _timer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (activeDownloads > 0) unawaited(refreshDownloads());
     });
-    await probeRoutes();
+    final scan = probeRoutes();
+    await (_firstRoute?.future ?? scan);
     if (loggedIn && healthyCount > 0) unawaited(loadProfile());
     if (loggedIn && healthyCount > 0) unawaited(loadRecommendations());
     if (loggedIn && historyPage != null && healthyCount > 0) {
@@ -104,11 +156,13 @@ class ReaderController extends ChangeNotifier {
   }
 
   Future<void> persist() => native.saveSettings({
+    'hideGroupInvite': hideGroupInvite,
     'automatic': automatic,
     'origin': activeOrigin,
     'theme': theme.name,
     'recent': recent,
     'bookmarks': bookmarks.map((b) => b.toJson()).toList(),
+    'hiddenHistory': _hiddenHistory.map((k, v) => MapEntry(k, v.toList())),
     'historyCache': _historyCache,
   });
   Future<void> setTheme(ThemeMode value) async {
@@ -175,6 +229,12 @@ class ReaderController extends ChangeNotifier {
   }
 
   bool bookmarked(Book book) => bookmarks.any((b) => b.ref == book.ref);
+  Future<void> removeRecent(String keyword) async {
+    recent.remove(keyword);
+    changed();
+    await persist();
+  }
+
   Future<void> clearRecent() async {
     recent.clear();
     changed();
@@ -185,7 +245,13 @@ class ReaderController extends ChangeNotifier {
       _probeFuture ??= _probeAll().whenComplete(() => _probeFuture = null);
   Future<void> _probeAll() async {
     probing = true;
-    routes = knownHosts.map((h) => RouteInfo('https://$h')).toList();
+    final first = _firstRoute = Completer<void>();
+    final previous = activeOrigin;
+    final hosts = [...knownHosts];
+    final preferred = Uri.tryParse(previous)?.host;
+    if (preferred != null && hosts.remove(preferred))
+      hosts.insert(0, preferred);
+    routes = hosts.map((h) => RouteInfo('https://$h')).toList();
     changed();
     var cursor = 0;
     Future<void> worker() async {
@@ -195,8 +261,14 @@ class ReaderController extends ChangeNotifier {
         routes[index].detail = '正在检测';
         changed();
         routes[index] = await api.probe(routes[index].origin);
-        if (automatic && activeOrigin.isEmpty && routes[index].usable)
-          activeOrigin = routes[index].effectiveOrigin;
+        if (!first.isCompleted &&
+            routes[index].usable &&
+            (automatic ||
+                routes[index].effectiveOrigin == activeOrigin ||
+                routes[index].origin == activeOrigin)) {
+          if (automatic) activeOrigin = routes[index].effectiveOrigin;
+          first.complete();
+        }
         changed();
       }
     }
@@ -207,11 +279,25 @@ class ReaderController extends ChangeNotifier {
         ..sort((a, b) => a.milliseconds.compareTo(b.milliseconds));
       if (automatic && usable.isNotEmpty)
         activeOrigin = usable.first.effectiveOrigin;
+      if (!automatic) {
+        for (final route in usable) {
+          if (route.origin == activeOrigin)
+            activeOrigin = route.effectiveOrigin;
+        }
+      }
+      final destinations = <String>{};
+      // Keep the fastest working entry for each final HTTPS origin.
+      routes = [
+        for (final route in usable)
+          if (destinations.add(route.effectiveOrigin)) route,
+        ...routes.where((route) => !route.usable),
+      ];
       if (usable.isEmpty) say('暂未发现可用线路。请检查网络后重新检测，也可稍后重试');
       await persist();
     } catch (_) {
       say('线路检测未完成，请重新检测');
     } finally {
+      if (!first.isCompleted) first.complete();
       probing = false;
       changed();
     }
@@ -236,7 +322,8 @@ class ReaderController extends ChangeNotifier {
   }
 
   Future<void> ensureRoute() async {
-    if (activeOrigin.isEmpty && probing) await _probeFuture;
+    if (probing && automatic && !(_firstRoute?.isCompleted ?? true))
+      await _firstRoute?.future;
     if (activeOrigin.isEmpty) throw const ApiException('请先检测并选择一条可用线路');
   }
 
@@ -302,6 +389,15 @@ class ReaderController extends ChangeNotifier {
     changed();
   }
 
+  void returnToRecommendations() {
+    ++_searchGeneration;
+    query = '';
+    searchPage = null;
+    searchError = '';
+    searching = false;
+    changed();
+  }
+
   Future<void> search(
     String value, {
     int page = 1,
@@ -310,6 +406,7 @@ class ReaderController extends ChangeNotifier {
   }) async {
     final input = value.trim();
     if (input.isEmpty) return;
+    if (query != input) searchPage = null;
     query = input;
     format = fileFormat ?? format;
     language = lang ?? language;
@@ -384,11 +481,13 @@ class ReaderController extends ChangeNotifier {
 
   Future<void> loadHistory({int page = 1}) async {
     if (historyLoading || !loggedIn) return;
+    final historyUser = session?.userId;
     historyLoading = true;
     historyError = '';
     changed();
     try {
       final result = await read((o, s) => api.history(o, s, page));
+      if (session?.userId != historyUser) return;
       final previous = page > 1
           ? (historyPage?.books ?? const <Book>[])
           : const <Book>[];
@@ -512,25 +611,44 @@ class ReaderController extends ChangeNotifier {
     changed();
   }
 
-  Future<void> startDownload(Book book) async {
-    if (resolvingDownloads.contains(book.ref) ||
-        downloads.any((d) => d.active && d.book.ref == book.ref)) {
+  Future<bool> startDownload(
+    Book book, {
+    required Future<void> Function(DownloadRecord) onExistingFile,
+  }) async {
+    if (resolvingDownloads.contains(book.id) ||
+        downloads.any((d) => d.active && d.book.id == book.id)) {
       say('这本书已经在下载队列中');
-      return;
+      return false;
     }
     if (!loggedIn) throw const ApiException('请先登录账户', needsLogin: true);
-    resolvingDownloads.add(book.ref);
+    resolvingDownloads.add(book.id);
     changed();
     try {
+      final records = await native.downloads();
+      for (final item in records.where((d) => d.book.id == book.id)) {
+        if (item.active || item.status == 'paused') {
+          say('已有下载任务，可从侧边栏查看或继续');
+          return false;
+        }
+      }
+      for (final item in records.reversed.where(
+        (d) => d.book.id == book.id && d.complete,
+      )) {
+        if (await native.fileAvailable(item.uri)) {
+          await onExistingFile(item);
+          return false;
+        }
+      }
       await ensureRoute();
       final s = session!;
       final origin = activeOrigin;
       final link = await api.fileUrl(origin, s, book);
       await native.download(book, link, api.downloadHeaders(origin, s), origin);
       await refreshDownloads();
-      say('已加入下载队列，可在「下载」查看进度');
+      say('已加入下载队列，可在侧边栏「下载任务」查看');
+      return true;
     } finally {
-      resolvingDownloads.remove(book.ref);
+      resolvingDownloads.remove(book.id);
       changed();
     }
   }
@@ -612,10 +730,11 @@ class ReaderController extends ChangeNotifier {
         }
       }),
     );
+    if (!identical(historyPage, page)) return;
     for (final item in detailed) {
       final (i, book) = item;
       if (book.cover.isNotEmpty) {
-        books[i] = book;
+        books[i] = books[i].withCover(book.cover);
         changedAny = true;
       }
     }

@@ -64,6 +64,8 @@ class NativeBridge {
       channel.invokeMethod('pauseDownload', id);
   Future<void> resumeDownload(String id) =>
       channel.invokeMethod('resumeDownload', id);
+  Future<bool> fileAvailable(String uri) async =>
+      await channel.invokeMethod<bool>('fileAvailable', uri) ?? false;
   Future<void> openFile(DownloadRecord item) => channel.invokeMethod(
     'openFile',
     {'uri': item.uri, 'fileName': item.fileName},
@@ -74,5 +76,9 @@ class NativeBridge {
   );
   Future<void> removeRecord(String id, {bool deleteFile = false}) => channel
       .invokeMethod('removeRecord', {'id': id, 'deleteFile': deleteFile});
+  Future<String> appVersion() async =>
+      await channel.invokeMethod<String>('appVersion') ?? '';
+  Future<List<String>> supportedAbis() async =>
+      await channel.invokeListMethod<String>('supportedAbis') ?? [];
   Future<void> openUrl(String url) => channel.invokeMethod('openUrl', url);
 }

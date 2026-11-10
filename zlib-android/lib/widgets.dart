@@ -101,7 +101,7 @@ class BookCover extends StatelessWidget {
       width: width,
       height: height,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(4),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: .08),
@@ -111,7 +111,7 @@ class BookCover extends StatelessWidget {
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(4),
         child: book.cover.isNotEmpty
             ? remoteCover(book.cover)
             : fallbackCover.isNotEmpty
@@ -138,16 +138,8 @@ class BookTile extends StatelessWidget {
   String _downloadTimeLabel() {
     final raw = book.downloadedAt.trim();
     if (raw.isEmpty) return '下载时间未知';
-    final numeric = int.tryParse(raw);
-    final parsed = numeric == null
-        ? DateTime.tryParse(
-            raw.replaceAll('/', '-').replaceFirst(RegExp(r'\s+'), 'T'),
-          )
-        : DateTime.fromMillisecondsSinceEpoch(
-            numeric < 100000000000 ? numeric * 1000 : numeric,
-          );
-    if (parsed == null) return raw;
-    final time = parsed.toLocal();
+    final time = book.localDownloadTime;
+    if (time == null) return raw;
     String two(int value) => value.toString().padLeft(2, '0');
     return '${time.year}-${two(time.month)}-${two(time.day)} '
         '${two(time.hour)}:${two(time.minute)}';
@@ -586,7 +578,7 @@ Future<void> showRoutes(BuildContext context, ReaderController c) =>
                                 color: color,
                               ),
                         title: Text(
-                          r.host,
+                          r.usable ? Uri.parse(r.effectiveOrigin).host : r.host,
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                         subtitle: Text(

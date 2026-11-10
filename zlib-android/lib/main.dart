@@ -7,6 +7,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'controller.dart';
 import 'widgets.dart';
 import 'screens.dart';
+import 'reading_invite.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,17 +17,30 @@ void main() {
 ThemeData readerTheme(Brightness brightness) {
   final dark = brightness == Brightness.dark;
   final scheme = ColorScheme.fromSeed(
-    seedColor: const Color(0xff286b5b),
+    seedColor: const Color(0xff435534),
     brightness: brightness,
-    surface: dark ? const Color(0xff111b18) : const Color(0xfff7f7f2),
+    surface: dark ? const Color(0xff1e221b) : const Color(0xfffaf6ec),
   );
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
     brightness: brightness,
     scaffoldBackgroundColor: scheme.surface,
+    navigationBarTheme: const NavigationBarThemeData(
+      iconTheme: WidgetStatePropertyAll(IconThemeData(size: 19)),
+      labelTextStyle: WidgetStatePropertyAll(
+        TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+      ),
+    ),
+    drawerTheme: DrawerThemeData(
+      backgroundColor: scheme.surface,
+      shape: const RoundedRectangleBorder(),
+    ),
     appBarTheme: AppBarTheme(
       backgroundColor: scheme.surface,
+      shape: Border(
+        bottom: BorderSide(color: scheme.outlineVariant, width: .6),
+      ),
       surfaceTintColor: Colors.transparent,
       systemOverlayStyle: dark
           ? SystemUiOverlayStyle.light
@@ -36,10 +50,10 @@ ThemeData readerTheme(Brightness brightness) {
       filled: true,
       fillColor: scheme.surfaceContainerHighest.withValues(alpha: .48),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(8),
         borderSide: BorderSide.none,
       ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 17),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
@@ -56,8 +70,8 @@ ThemeData readerTheme(Brightness brightness) {
     cardTheme: CardThemeData(
       elevation: 0,
       margin: EdgeInsets.zero,
-      color: dark ? const Color(0xff1b2823) : Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      color: dark ? const Color(0xff272d23) : const Color(0xfff6f1e6),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     ),
     bottomSheetTheme: BottomSheetThemeData(
       backgroundColor: scheme.surface,
@@ -69,19 +83,26 @@ ThemeData readerTheme(Brightness brightness) {
     ),
     textTheme: const TextTheme(
       headlineLarge: TextStyle(
-        fontSize: 28,
+        fontFamily: 'serif',
+        fontSize: 22,
         fontWeight: FontWeight.w800,
         height: 1.35,
         letterSpacing: -.8,
       ),
       headlineSmall: TextStyle(
-        fontSize: 24,
+        fontFamily: 'serif',
+        fontSize: 20,
         fontWeight: FontWeight.w700,
         height: 1.35,
       ),
-      titleLarge: TextStyle(fontSize: 21, fontWeight: FontWeight.w700),
+      titleLarge: TextStyle(
+        fontFamily: 'serif',
+        fontSize: 17,
+        fontWeight: FontWeight.w700,
+      ),
       titleMedium: TextStyle(
-        fontSize: 16,
+        fontFamily: 'serif',
+        fontSize: 15,
         fontWeight: FontWeight.w600,
         height: 1.5,
       ),
@@ -131,6 +152,37 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
+  bool _promptsStarted = false;
+  Future<void> _startupPrompts() async {
+    if (!mounted) return;
+    if (!c.hideGroupInvite) {
+      final choice = await showDialog<InviteChoice>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const ReadingInvite(),
+      );
+      if (choice?.hide == true) {
+        c.hideGroupInvite = true;
+        try {
+          await c.persist();
+          if (mounted) c.say('以后可以从侧边栏「一起读书」加入群聊');
+        } catch (_) {
+          c.hideGroupInvite = false;
+          if (mounted) c.say('未能保存邀请偏好，请稍后重试');
+        }
+      }
+      if (choice?.join == true) await _open(kReadingClubUrl);
+    }
+  }
+
+  Future<void> _open(String url) async {
+    try {
+      await c.native.openUrl(url);
+    } catch (_) {
+      c.say('无法打开链接，请检查设备是否已安装浏览器');
+    }
+  }
+
   int _noticeId = 0;
   ReaderController get c => widget.controller;
   @override
@@ -184,19 +236,36 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           ),
         ),
       );
+    if (!_promptsStarted) {
+      _promptsStarted = true;
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => unawaited(_startupPrompts()),
+      );
+    }
     return Scaffold(
       appBar: AppBar(
-        toolbarHeight: 54,
-        titleSpacing: 14,
+        toolbarHeight: 48,
+        titleSpacing: 0,
         title: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            BrandMark(size: 26),
-            SizedBox(width: 8),
-            Text('z-lib', style: TextStyle(fontWeight: FontWeight.w800)),
+            Text(
+              'z-lib',
+              style: TextStyle(
+                fontSize: 22,
+                fontFamily: 'serif',
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ],
         ),
         actions: [
+          if (c.selectedTab == 1 && c.loggedIn)
+            IconButton(
+              tooltip: '刷新历史',
+              icon: const Icon(Icons.refresh),
+              onPressed: c.historyLoading ? null : c.loadHistory,
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: TextButton.icon(
@@ -242,15 +311,17 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         child: SafeArea(child: ProfileScreen(controller: c)),
       ),
       bottomNavigationBar: NavigationBar(
-        height: 62,
+        height: 52,
+        backgroundColor: colors.surface,
+        indicatorColor: colors.primary.withValues(alpha: .10),
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         selectedIndex: c.selectedTab,
         onDestinationSelected: c.setTab,
         destinations: [
           const NavigationDestination(
-            icon: Icon(Icons.search_rounded),
-            selectedIcon: Icon(Icons.travel_explore_rounded),
-            label: '找书',
+            icon: Icon(Icons.menu_book_outlined),
+            selectedIcon: Icon(Icons.menu_book_rounded),
+            label: '首页',
           ),
           const NavigationDestination(
             icon: Icon(Icons.history_outlined),

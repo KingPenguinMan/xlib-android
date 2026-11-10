@@ -5,10 +5,10 @@ import 'package:flutter/material.dart';
 import 'controller.dart';
 import 'domain.dart';
 import 'native.dart';
+import 'preview_loader.dart';
 import 'widgets.dart';
 
-const String kReadingClubUrl =
-    'https://qun.qq.com/universal-share/share?ac=1&authKey=klPDdsQvyapZ%2BJQ4GKbP%2Bkv2%2BlOKLeWk3f3Vnj9zlXKAF0rjgmVKTtl%2Fa7L8JNFs&busi_data=eyJncm91cENvZGUiOiIxMTI3NTgwNzY0IiwidG9rZW4iOiJ3bDArWTROYk1yWCtucjUvd2Z2OUNPYTlIQ2NGbmhkRHhCSHBPMlUyMitnWjd2bEV4ZEJ2bmZpNWMyc3pIRUVqIiwidWluIjoiNDg2NTcwNDg5In0%3D&data=umzDS6-fLkK4YM3FyLGDKXSuwKD1dhWbhYColBGvVMszDGLPI5JHIxJRxSuPI6KOxnFLZ9_pTOqB6F0giAUA5w&svctype=4&tempid=h5_group_info';
+const String kReadingClubUrl = 'https://qm.qq.com/q/lGu49c8YDY';
 
 class SearchScreen extends StatefulWidget {
   final ReaderController controller;
@@ -18,27 +18,13 @@ class SearchScreen extends StatefulWidget {
 }
 
 class _SearchScreenState extends State<SearchScreen> {
-  final input = TextEditingController();
-  final focus = FocusNode();
-  @override
-  void dispose() {
-    input.dispose();
-    focus.dispose();
-    super.dispose();
-  }
-
-  Future<void> submit() async {
-    focus.unfocus();
-    await widget.controller.search(input.text);
-  }
-
   Widget recommendationTile(
     BuildContext context,
     ReaderController controller,
     Book book,
     double width,
   ) => Padding(
-    padding: const EdgeInsets.only(bottom: 16),
+    padding: const EdgeInsets.only(bottom: 10),
     child: InkWell(
       onTap: () => showBookDetails(context, controller, book),
       borderRadius: BorderRadius.circular(12),
@@ -46,12 +32,17 @@ class _SearchScreenState extends State<SearchScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           BookCover(book, width: width, height: width * 1.42),
-          const SizedBox(height: 7),
+          const SizedBox(height: 4),
           Text(
             book.title,
-            maxLines: 3,
+            maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.titleSmall,
+            style: const TextStyle(
+              fontFamily: 'serif',
+              fontSize: 13,
+              height: 1.35,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -65,7 +56,6 @@ class _SearchScreenState extends State<SearchScreen> {
       onNotification: (notification) {
         if (notification.metrics.axis == Axis.vertical &&
             notification.metrics.extentAfter < 420 &&
-            c.searchPage == null &&
             c.recommendationHasMore &&
             !c.recommendationsLoading) {
           unawaited(c.loadRecommendations());
@@ -77,78 +67,28 @@ class _SearchScreenState extends State<SearchScreen> {
         child: CustomScrollView(
           slivers: [
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 22, 20, 0),
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
               sliver: SliverToBoxAdapter(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '今天读什么？',
-                      style: Theme.of(context).textTheme.headlineLarge,
-                    ),
-                    const SizedBox(height: 6),
-                    const Text('从书海里找到下一本想读的书。'),
-                    const SizedBox(height: 18),
-                    TextField(
-                      controller: input,
-                      focusNode: focus,
-                      textInputAction: TextInputAction.search,
-                      onSubmitted: (_) => submit(),
-                      decoration: InputDecoration(
-                        hintText: '输入书名、作者或关键词',
-                        prefixIcon: const Icon(Icons.search_rounded),
-                        suffixIcon: c.searching
-                            ? const Padding(
-                                padding: EdgeInsets.all(14),
-                                child: SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                ),
-                              )
-                            : IconButton(
-                                onPressed: submit,
-                                icon: const Icon(Icons.arrow_forward_rounded),
-                              ),
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    alignment: Alignment.centerLeft,
+                  ),
+                  icon: const Icon(Icons.search),
+                  label: const Text('搜书名、作者或关键词'),
+                  onPressed: () async {
+                    c.returnToRecommendations();
+                    await Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => SearchPage(controller: c),
                       ),
-                    ),
-                    const SizedBox(height: 14),
-                    if (c.recent.isNotEmpty)
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          const Icon(Icons.history_rounded, size: 18),
-                          ...c.recent
-                              .take(5)
-                              .map(
-                                (q) => ActionChip(
-                                  label: Text(q),
-                                  onPressed: () {
-                                    input.text = q;
-                                    submit();
-                                  },
-                                ),
-                              ),
-                        ],
-                      ),
-                  ],
+                    );
+                    c.returnToRecommendations();
+                  },
                 ),
               ),
             ),
-            if (c.searchError.isNotEmpty)
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-                sliver: SliverToBoxAdapter(
-                  child: ErrorPanel(
-                    message: c.searchError,
-                    onRetry: () => c.search(input.text),
-                  ),
-                ),
-              ),
-            if (c.searchPage == null && c.searchError.isEmpty) ...[
+            ...[
               if (!c.loggedIn)
                 SliverFillRemaining(
                   hasScrollBody: false,
@@ -179,16 +119,22 @@ class _SearchScreenState extends State<SearchScreen> {
                 )
               else ...[
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(20, 24, 16, 10),
+                  padding: const EdgeInsets.fromLTRB(12, 0, 8, 2),
                   sliver: SliverToBoxAdapter(
                     child: Row(
                       children: [
-                        Expanded(
-                          child: Text(
-                            '热门推荐',
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
+                        const Icon(
+                          Icons.bookmark,
+                          color: Color(0xffaa4934),
+                          size: 18,
                         ),
+                        const SizedBox(width: 5),
+                        Text(
+                          '热门推荐',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(child: Divider()),
                         IconButton(
                           tooltip: '换一批',
                           onPressed: c.recommendationsLoading
@@ -209,7 +155,7 @@ class _SearchScreenState extends State<SearchScreen> {
                   ),
                 ),
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 20),
                   sliver: SliverToBoxAdapter(
                     child: LayoutBuilder(
                       builder: (context, constraints) {
@@ -224,11 +170,12 @@ class _SearchScreenState extends State<SearchScreen> {
                         return Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: List.generate(columnCount, (column) {
-                            return Expanded(
-                              child: Padding(
-                                padding: EdgeInsets.only(
-                                  right: column == columnCount - 1 ? 0 : gap,
-                                ),
+                            return Padding(
+                              padding: EdgeInsets.only(
+                                right: column == columnCount - 1 ? 0 : gap,
+                              ),
+                              child: SizedBox(
+                                width: coverWidth,
                                 child: Column(
                                   children: [
                                     for (
@@ -254,75 +201,211 @@ class _SearchScreenState extends State<SearchScreen> {
                 ),
               ],
             ],
-            if (c.searchPage != null) ...[
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 22, 20, 12),
-                sliver: SliverToBoxAdapter(
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '搜索结果',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                      ),
-                      Text(
-                        '${c.searchPage!.books.length} 本',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              if (c.searchPage!.books.isEmpty)
-                const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: EmptyState(
-                    icon: Icons.search_off_rounded,
-                    title: '没有找到相关图书',
-                    message: '换个关键词再试试。',
-                  ),
-                ),
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                sliver: SliverList.separated(
-                  itemCount: c.searchPage!.books.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (context, index) {
-                    final book = c.searchPage!.books[index];
-                    return BookTile(
-                      book,
-                      onTap: () => showBookDetails(context, c, book),
-                      trailing: BookAction(book: book, controller: c),
-                    );
-                  },
-                ),
-              ),
-              if (c.searchPage!.totalPages > c.searchPage!.page)
-                SliverPadding(
-                  padding: const EdgeInsets.only(bottom: 28),
-                  sliver: SliverToBoxAdapter(
-                    child: Center(
-                      child: OutlinedButton.icon(
-                        onPressed: c.searching
-                            ? null
-                            : () => c.search(
-                                input.text,
-                                page: c.searchPage!.page + 1,
-                              ),
-                        icon: const Icon(Icons.arrow_downward_rounded),
-                        label: Text('加载第 ${c.searchPage!.page + 1} 页'),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
           ],
         ),
       ),
     );
   }
 }
+
+class SearchPage extends StatefulWidget {
+  final ReaderController controller;
+  const SearchPage({super.key, required this.controller});
+  @override
+  State<SearchPage> createState() => _SearchPageState();
+}
+
+class _SearchPageState extends State<SearchPage> {
+  final input = TextEditingController();
+  final focus = FocusNode();
+  @override
+  void dispose() {
+    input.dispose();
+    focus.dispose();
+    super.dispose();
+  }
+
+  Future<void> submit() async {
+    focus.unfocus();
+    await widget.controller.search(input.text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller;
+    return AnimatedBuilder(
+      animation: c,
+      builder: (context, _) => Scaffold(
+        appBar: AppBar(
+          titleSpacing: 0,
+          title: TextField(
+            controller: input,
+            focusNode: focus,
+            autofocus: true,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (_) => submit(),
+            decoration: const InputDecoration(
+              hintText: '搜书名、作者或关键词',
+              isDense: true,
+            ),
+          ),
+          actions: [
+            IconButton(
+              tooltip: '搜索',
+              icon: const Icon(Icons.search),
+              onPressed: submit,
+            ),
+          ],
+        ),
+        body: SafeArea(
+          child: CustomScrollView(
+            slivers: [
+              if (c.recent.isNotEmpty && c.searchPage == null)
+                SliverPadding(
+                  padding: const EdgeInsets.all(14),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Expanded(child: Text('搜索历史')),
+                            TextButton(
+                              onPressed: c.clearRecent,
+                              child: const Text('清空'),
+                            ),
+                          ],
+                        ),
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            for (final q in c.recent)
+                              InputChip(
+                                label: Text(q),
+                                deleteButtonTooltipMessage: '删除搜索记录',
+                                onDeleted: () => c.removeRecent(q),
+                                onPressed: () {
+                                  input.text = q;
+                                  submit();
+                                },
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (c.searching)
+                const SliverToBoxAdapter(child: LinearProgressIndicator()),
+              if (c.searchError.isNotEmpty)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: ErrorPanel(
+                      message: c.searchError,
+                      onRetry: () => c.search(input.text),
+                    ),
+                  ),
+                ),
+              if (c.searchPage != null) ...[
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(14, 6, 10, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '搜索结果',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ),
+                        Text(
+                          '${c.searchPage!.books.length} 本',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (c.searchPage!.books.isEmpty)
+                  const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: EmptyState(
+                      icon: Icons.search_off_rounded,
+                      title: '没有找到相关图书',
+                      message: '换个关键词再试试。',
+                    ),
+                  ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                  sliver: SliverList.separated(
+                    itemCount: c.searchPage!.books.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final book = c.searchPage!.books[index];
+                      return BookTile(
+                        book,
+                        onTap: () => showBookDetails(context, c, book),
+                        trailing: BookAction(book: book, controller: c),
+                      );
+                    },
+                  ),
+                ),
+                if (c.searchPage!.totalPages > c.searchPage!.page)
+                  SliverPadding(
+                    padding: const EdgeInsets.only(bottom: 28),
+                    sliver: SliverToBoxAdapter(
+                      child: Center(
+                        child: OutlinedButton.icon(
+                          onPressed: c.searching
+                              ? null
+                              : () => c.search(
+                                  c.query,
+                                  page: c.searchPage!.page + 1,
+                                ),
+                          icon: const Icon(Icons.arrow_downward_rounded),
+                          label: Text('加载第 ${c.searchPage!.page + 1} 页'),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<bool> requestBookDownload(
+  BuildContext context,
+  ReaderController c,
+  Book book,
+) => c.startDownload(
+  book,
+  onExistingFile: (file) async {
+    if (!context.mounted) return;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: const Text('这本书已下载'),
+        content: Text(file.fileName),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(d),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(d, 'open'),
+            child: const Text('打开已有文件'),
+          ),
+        ],
+      ),
+    );
+    if (result == 'open') await c.native.openFile(file);
+  },
+);
 
 class BookAction extends StatelessWidget {
   final Book book;
@@ -331,13 +414,15 @@ class BookAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final busy =
-        controller.resolvingDownloads.contains(book.ref) ||
-        controller.downloads.any((d) => d.active && d.book.ref == book.ref);
+        controller.resolvingDownloads.contains(book.id) ||
+        controller.downloads.any((d) => d.active && d.book.id == book.id);
     return IconButton(
       tooltip: busy ? '下载中' : '下载',
       onPressed: busy
           ? null
-          : () => guarded(context, () => controller.startDownload(book)),
+          : () => guarded(context, () async {
+              await requestBookDownload(context, controller, book);
+            }),
       icon: Icon(
         busy ? Icons.downloading_rounded : Icons.download_for_offline_outlined,
       ),
@@ -480,12 +565,8 @@ class HistoryScreen extends StatelessWidget {
     final c = controller;
     if (!c.loggedIn) {
       return ListView(
-        padding: const EdgeInsets.fromLTRB(20, 28, 20, 30),
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 20),
         children: [
-          Text('下载记录', style: Theme.of(context).textTheme.headlineLarge),
-          const SizedBox(height: 6),
-          const Text('登录后查看账户在云端的下载历史。'),
-          const SizedBox(height: 26),
           EmptyState(
             icon: Icons.lock_outline_rounded,
             title: '请先登录',
@@ -496,7 +577,7 @@ class HistoryScreen extends StatelessWidget {
         ],
       );
     }
-    final page = c.historyPage;
+    final page = c.visibleHistoryPage;
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
         final current = c.historyPage;
@@ -513,32 +594,6 @@ class HistoryScreen extends StatelessWidget {
         onRefresh: () => c.loadHistory(page: 1),
         child: CustomScrollView(
           slivers: [
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 22, 20, 12),
-              sliver: SliverToBoxAdapter(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '下载记录',
-                        style: Theme.of(context).textTheme.headlineLarge,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '刷新',
-                      onPressed: c.historyLoading ? null : c.loadHistory,
-                      icon: c.historyLoading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.refresh_rounded),
-                    ),
-                  ],
-                ),
-              ),
-            ),
             if (c.historyError.isNotEmpty)
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
@@ -565,7 +620,7 @@ class HistoryScreen extends StatelessWidget {
                   onAction: c.loadHistory,
                 ),
               )
-            else if (page.books.isEmpty)
+            else if (page.books.isEmpty && page.page >= page.totalPages)
               const SliverFillRemaining(
                 hasScrollBody: false,
                 child: EmptyState(
@@ -581,16 +636,135 @@ class HistoryScreen extends StatelessWidget {
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                     sliver: SliverList.separated(
                       itemCount: page.books.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, i) => BookTile(
-                        page.books[i],
-                        onTap: () => showBookDetails(context, c, page.books[i]),
-                        trailing: BookAction(
-                          book: page.books[i],
-                          controller: c,
-                        ),
-                        showDownloadDate: true,
-                      ),
+                      separatorBuilder: (_, __) => const Divider(),
+                      itemBuilder: (context, i) {
+                        final book = page.books[i];
+                        final date = book.localDownloadTime;
+                        final day = date == null
+                            ? null
+                            : DateUtils.dateOnly(date);
+                        final previous = i == 0
+                            ? null
+                            : page.books[i - 1].localDownloadTime;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (i == 0 || !DateUtils.isSameDay(day, previous))
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  top: 10,
+                                  bottom: 4,
+                                ),
+                                child: Text(
+                                  day == null
+                                      ? '日期未知'
+                                      : '${day.year}年${day.month}月${day.day}日',
+                                  style: TextStyle(
+                                    fontFamily: 'serif',
+                                    fontSize: 13,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primary,
+                                  ),
+                                ),
+                              ),
+                            InkWell(
+                              onTap: () => showBookDetails(context, c, book),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 6,
+                                ),
+                                child: Row(
+                                  children: [
+                                    BookCover(book, width: 40, height: 56),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            book.title,
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleMedium,
+                                          ),
+                                          if (book.author.isNotEmpty)
+                                            Text(
+                                              book.author,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .bodySmall,
+                                            ),
+                                          Text(
+                                            [
+                                                  book.extension,
+                                                  book.size,
+                                                  if (date != null)
+                                                    TimeOfDay.fromDateTime(date)
+                                                        .format(context)
+                                                  else
+                                                    book.downloadedAt,
+                                                ]
+                                                .where((v) => v.isNotEmpty)
+                                                .join(' · '),
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    BookAction(book: book, controller: c),
+                                    IconButton(
+                                      tooltip: '删除历史记录',
+                                      icon: const Icon(
+                                        Icons.delete_outline,
+                                        size: 19,
+                                      ),
+                                      onPressed: () async {
+                                        final user = c.session?.userId;
+                                        final yes = await showDialog<bool>(
+                                          context: context,
+                                          builder: (d) => AlertDialog(
+                                            title: const Text('删除这条历史记录？'),
+                                            content: Text(
+                                              '从本机此账户的历史中移除《${book.title}》。云端记录和书籍文件会保留。',
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(d),
+                                                child: const Text('取消'),
+                                              ),
+                                              FilledButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(d, true),
+                                                child: const Text('删除'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                        if (yes == true &&
+                                            user == c.session?.userId &&
+                                            context.mounted)
+                                          await guarded(
+                                            context,
+                                            () => c.hideHistory(book),
+                                          );
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ),
                   if (page.page < page.totalPages)
@@ -647,7 +821,12 @@ class DownloadTile extends StatelessWidget {
             children: [
               if (selected) const Icon(Icons.check_circle_rounded, size: 22),
               if (selected) const SizedBox(width: 8),
-              BookCover(item.book, width: 48, height: 70),
+              InkWell(
+                onTap: controller.selectingDownloads
+                    ? onTap
+                    : () => showBookDetails(context, controller, item.book),
+                child: BookCover(item.book, width: 48, height: 70),
+              ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -708,6 +887,14 @@ class DownloadTile extends StatelessWidget {
                   ],
                 ),
               ),
+              if (item.status == 'failed' && !controller.selectingDownloads)
+                IconButton(
+                  tooltip: '重新获取链接并下载',
+                  onPressed: () => guarded(context, () async {
+                    await requestBookDownload(context, controller, item.book);
+                  }),
+                  icon: const Icon(Icons.refresh_rounded),
+                ),
               if ((item.active || item.status == 'paused') && !selected)
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -809,130 +996,145 @@ class ProfileScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 18),
       children: [
-        Text('我的', style: Theme.of(context).textTheme.headlineSmall),
-        const SizedBox(height: 2),
-        Text('账户、历史和阅读设置', style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          '我的账户',
+          style: Theme.of(context).textTheme.headlineSmall
+              ?.copyWith(fontSize: 22),
+        ),
+        const Divider(),
         const SizedBox(height: 10),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: c.loggedIn
-                ? Row(
-                    children: [
-                      Builder(
-                        builder: (_) {
-                          final avatar = avatarUrl(c);
-                          return ClipOval(
-                            child: SizedBox.square(
-                              dimension: 44,
-                              child: avatar.isEmpty
-                                  ? _avatarFallback(context)
-                                  : Image.network(
-                                      avatar,
-                                      fit: BoxFit.cover,
-                                      headers: _avatarHeaders(c, avatar),
-                                      errorBuilder: (_, __, ___) =>
-                                          _avatarFallback(context),
-                                    ),
-                            ),
-                          );
-                        },
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: c.loggedIn
+              ? Row(
+                  children: [
+                    Builder(
+                      builder: (_) {
+                        final avatar = avatarUrl(c);
+                        return ClipOval(
+                          child: SizedBox.square(
+                            dimension: 50,
+                            child: avatar.isEmpty
+                                ? _avatarFallback(context)
+                                : Image.network(
+                                    avatar,
+                                    fit: BoxFit.cover,
+                                    headers: _avatarHeaders(c, avatar),
+                                    errorBuilder: (_, __, ___) =>
+                                        _avatarFallback(context),
+                                  ),
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            c.session!.email.isEmpty
+                                ? '已登录账户'
+                                : c.session!.email,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            c.profileData == null
+                                ? '正在获取账户信息…'
+                                : quota(c.profileData!),
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              c.session!.email.isEmpty
-                                  ? '已登录账户'
-                                  : c.session!.email,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              c.profileData == null
-                                  ? '正在获取账户信息…'
-                                  : quota(c.profileData!),
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ],
-                        ),
+                    ),
+                    IconButton(
+                      tooltip: '退出登录',
+                      onPressed: () {
+                        showDialog(
+                          context: context,
+                          builder: (_) => AlertDialog(
+                            title: const Text('退出登录？'),
+                            content: const Text('退出后仍可保留本地下载文件。'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text('取消'),
+                              ),
+                              FilledButton(
+                                onPressed: () {
+                                  Navigator.pop(context);
+                                  c.logout();
+                                },
+                                child: const Text('退出'),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.logout_rounded),
+                    ),
+                  ],
+                )
+              : Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 25,
+                      backgroundColor: Theme.of(context)
+                          .colorScheme
+                          .primaryContainer,
+                      child: Icon(
+                        Icons.person_outline_rounded,
+                        color: Theme.of(context).colorScheme.primary,
                       ),
-                      IconButton(
-                        tooltip: '退出登录',
-                        onPressed: () {
-                          showDialog(
-                            context: context,
-                            builder: (_) => AlertDialog(
-                              title: const Text('退出登录？'),
-                              content: const Text('退出后仍可保留本地下载文件。'),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context),
-                                  child: const Text('取消'),
-                                ),
-                                FilledButton(
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    c.logout();
-                                  },
-                                  child: const Text('退出'),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                        icon: const Icon(Icons.logout_rounded),
-                      ),
-                    ],
-                  )
-                : Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 22,
-                        backgroundColor: Theme.of(context)
-                            .colorScheme
-                            .primaryContainer,
-                        child: Icon(
-                          Icons.person_outline_rounded,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                      ),
-                      const SizedBox(width: 14),
-                      const Expanded(child: Text('登录后搜索、下载并同步账户历史记录')),
-                      FilledButton(
-                        onPressed: () => showLogin(context, c),
-                        child: const Text('登录'),
-                      ),
-                    ],
-                  ),
-          ),
+                    ),
+                    const SizedBox(width: 14),
+                    const Expanded(child: Text('登录后搜索、下载并同步账户历史记录')),
+                    FilledButton(
+                      onPressed: () => showLogin(context, c),
+                      child: const Text('登录'),
+                    ),
+                  ],
+                ),
         ),
         const SizedBox(height: 10),
-        Card(
+        ListTileTheme(
+          data: ListTileThemeData(
+            titleTextStyle: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontSize: 17),
+            subtitleTextStyle: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(fontSize: 13),
+          ),
           child: Column(
             children: [
               ListTile(
-                dense: true,
-                visualDensity: VisualDensity.compact,
+                minTileHeight: 56,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                leading: const Icon(Icons.bookmarks_outlined),
+                title: const Text('我的收藏'),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () {
+                  final navigator = Navigator.of(context);
+                  navigator.pop();
+                  navigator.push(MaterialPageRoute<void>(
+                    builder: (_) => BookmarksPage(controller: c),
+                  ));
+                },
+              ),
+              const Divider(),
+              ListTile(
+                dense: false,
+                minTileHeight: 56,
                 minVerticalPadding: 2,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                 leading: Badge(
                   isLabelVisible: c.activeDownloads > 0,
                   label: Text('${c.activeDownloads}'),
                   child: const Icon(Icons.download_rounded),
                 ),
                 title: const Text('下载任务'),
-                subtitle: Text(
-                  c.activeDownloads > 0
-                      ? '${c.activeDownloads} 项正在下载'
-                      : '查看本地下载进度与文件',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () {
                   Navigator.pop(context);
@@ -947,12 +1149,12 @@ class ProfileScreen extends StatelessWidget {
                   );
                 },
               ),
-              const Divider(indent: 56),
+              const Divider(),
               ListTile(
-                dense: true,
-                visualDensity: VisualDensity.compact,
+                dense: false,
+                minTileHeight: 56,
                 minVerticalPadding: 2,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                 leading: const Icon(Icons.folder_open_rounded),
                 title: const Text('下载目录'),
                 subtitle: Text(
@@ -963,58 +1165,48 @@ class ProfileScreen extends StatelessWidget {
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => showDirectory(context, c),
               ),
-              const Divider(indent: 56),
+              const Divider(),
               ListTile(
-                dense: true,
-                visualDensity: VisualDensity.compact,
+                dense: false,
+                minTileHeight: 56,
                 minVerticalPadding: 2,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                 leading: const Icon(Icons.palette_outlined),
                 title: const Text('外观'),
                 subtitle: Text(themeLabel(c.theme)),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => showTheme(context, c),
               ),
-              const Divider(indent: 56),
+              const Divider(),
               ListTile(
-                dense: true,
-                visualDensity: VisualDensity.compact,
+                dense: false,
+                minTileHeight: 56,
                 minVerticalPadding: 2,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                 leading: const Icon(Icons.lan_outlined),
                 title: const Text('连接线路'),
                 subtitle: Text(c.host),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => showRoutes(context, c),
               ),
+              const Divider(),
+              ListTile(
+                minTileHeight: 56,
+                dense: false,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                leading: const Icon(Icons.menu_book_outlined),
+                title: const Text('一起读书'),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () =>
+                    guarded(context, () => c.native.openUrl(kReadingClubUrl)),
+              ),
             ],
           ),
         ),
-        const SizedBox(height: 12),
         Center(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () async {
-              try {
-                await NativeBridge().openUrl(kReadingClubUrl);
-              } catch (_) {}
-            },
-            child: RichText(
-              text: TextSpan(
-                style: Theme.of(context).textTheme.bodySmall,
-                children: [
-                  const TextSpan(text: 'z-lib 0.1.0 · '),
-                  TextSpan(
-                    text: '一起读书',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.w600,
-                      decoration: TextDecoration.underline,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          child: Text(
+            'z-lib ${c.version}',
+            style: Theme.of(context).textTheme.bodySmall,
           ),
         ),
       ],
@@ -1051,6 +1243,40 @@ class ErrorPanel extends StatelessWidget {
   );
 }
 
+class BookmarksPage extends StatelessWidget {
+  final ReaderController controller;
+  const BookmarksPage({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('我的收藏')),
+    body: SafeArea(child: ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final books = controller.bookmarks;
+        if (books.isEmpty) {
+          return const Center(child: Text('还没有收藏，可在书籍详情页点「收藏」添加'));
+        }
+        return ListView.builder(
+          padding: const EdgeInsets.all(12),
+          itemCount: books.length,
+          itemBuilder: (context, index) {
+            final book = books[index];
+            return BookTile(book, key: ValueKey(book.ref),
+              onTap: () => showBookDetails(context, controller, book),
+              trailing: IconButton(
+                tooltip: '取消收藏',
+                icon: const Icon(Icons.bookmark_rounded),
+                onPressed: () => controller.toggleBookmark(book),
+              ),
+            );
+          },
+        );
+      },
+    )),
+  );
+}
+
 Future<void> showBookDetails(
   BuildContext context,
   ReaderController c,
@@ -1076,6 +1302,7 @@ class BookDetailsSheet extends StatefulWidget {
 
 class _BookDetailsSheetState extends State<BookDetailsSheet> {
   late Book book;
+  bool titleExpanded = false;
   bool loading = true;
   String error = '';
   @override
@@ -1106,16 +1333,37 @@ class _BookDetailsSheetState extends State<BookDetailsSheet> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              BookCover(book, width: 112, height: 162),
-              const SizedBox(width: 18),
+              LayoutBuilder(builder: (context, _) {
+                final width = MediaQuery.sizeOf(context).width < 500 ? 78.0 : 100.0;
+                return BookCover(book, width: width, height: width * 1.45);
+              }),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      book.title,
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
+                    LayoutBuilder(builder: (context, constraints) {
+                      final style = DefaultTextStyle.of(context).style.merge(
+                        Theme.of(context).textTheme.titleLarge?.copyWith(fontSize: 20, height: 1.25),
+                      );
+                      final measure = TextPainter(
+                        text: TextSpan(text: book.title, style: style),
+                        maxLines: 2, ellipsis: '…',
+                        textDirection: Directionality.of(context),
+                        textScaler: MediaQuery.textScalerOf(context),
+                        locale: Localizations.maybeLocaleOf(context),
+                      )..layout(maxWidth: constraints.maxWidth);
+                      final overflows = measure.didExceedMaxLines;
+                      measure.dispose();
+                      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(book.title, style: style, maxLines: titleExpanded ? null : 2,
+                          overflow: titleExpanded ? TextOverflow.visible : TextOverflow.ellipsis),
+                        if (overflows) TextButton(
+                          onPressed: () => setState(() => titleExpanded = !titleExpanded),
+                          child: Text(titleExpanded ? '收起书名' : '展开完整书名'),
+                        ),
+                      ]);
+                    }),
                     const SizedBox(height: 8),
                     Text(
                       book.author.isEmpty ? '作者信息暂缺' : book.author,
@@ -1130,41 +1378,54 @@ class _BookDetailsSheetState extends State<BookDetailsSheet> {
                         if (book.year.isNotEmpty) Pill(book.year),
                       ],
                     ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        IconButton(
-                          tooltip: widget.controller.bookmarked(book)
-                              ? '取消收藏'
-                              : '收藏',
-                          onPressed: () {
-                            widget.controller.toggleBookmark(book);
-                            setState(() {});
-                          },
-                          icon: Icon(
-                            widget.controller.bookmarked(book)
-                                ? Icons.bookmark_rounded
-                                : Icons.bookmark_border_rounded,
-                          ),
-                        ),
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: () => guarded(context, () async {
-                              await widget.controller.startDownload(book);
-                              if (context.mounted) Navigator.pop(context);
-                            }),
-                            icon: const Icon(Icons.download_rounded),
-                            label: const Text('下载'),
-                          ),
-                        ),
-                      ],
-                    ),
                   ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 14),
+          LayoutBuilder(builder: (context, constraints) {
+            final saved = widget.controller.bookmarked(book);
+            final actions = <Widget>[
+              IconButton.outlined(
+                tooltip: saved ? '取消收藏' : '收藏',
+                onPressed: () => guarded(context, () async {
+                  await widget.controller.toggleBookmark(book);
+                  if (mounted) setState(() {});
+                }),
+                icon: Icon(saved ? Icons.bookmark : Icons.bookmark_border),
+              ),
+              if (book.downloadable && {'EPUB', 'PDF'}.contains(book.extension))
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.push<void>(
+                    context,
+                    MaterialPageRoute(builder: (_) =>
+                      PreviewLoader(controller: widget.controller, book: book)),
+                  ),
+                  icon: const Icon(Icons.chrome_reader_mode_outlined, size: 18),
+                  label: const Text('在线预览'),
+                ),
+              FilledButton.icon(
+                onPressed: () => guarded(context, () async {
+                  final queued = await requestBookDownload(context, widget.controller, book);
+                  if (queued && context.mounted) Navigator.pop(context);
+                }),
+                icon: const Icon(Icons.download_rounded, size: 18),
+                label: const Text('下载'),
+              ),
+            ];
+            if (constraints.maxWidth < 300 * MediaQuery.textScalerOf(context).scale(1)) {
+              return Wrap(spacing: 8, runSpacing: 8, children: actions);
+            }
+            return Row(children: [
+              actions.first,
+              for (final action in actions.skip(1)) ...[
+                const SizedBox(width: 8),
+                Expanded(child: SizedBox(height: 46, child: action)),
+              ],
+            ]);
+          }),
+          const SizedBox(height: 16),
           if (loading) const LinearProgressIndicator(),
           if (error.isNotEmpty) ErrorPanel(message: error, onRetry: load),
           if (book.description.isNotEmpty) ...[
@@ -1213,7 +1474,7 @@ Future<void> showHistory(BuildContext context, ReaderController c) {
       child: AnimatedBuilder(
         animation: c,
         builder: (context, _) {
-          final page = c.historyPage;
+          final page = c.visibleHistoryPage;
           late final Widget content;
           if (c.historyLoading && page == null) {
             content = const Center(child: CircularProgressIndicator());

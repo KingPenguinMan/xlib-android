@@ -81,4 +81,49 @@ class NativeBridge {
   Future<List<String>> supportedAbis() async =>
       await channel.invokeListMethod<String>('supportedAbis') ?? [];
   Future<void> openUrl(String url) => channel.invokeMethod('openUrl', url);
+
+  /// 尝试打开链接，返回是否成功。用于深链（例如 weread://），
+  /// 没装对应 App 时原生会报 NO_APP，这里转成 false。
+  Future<bool> tryOpenUrl(String url) async {
+    try {
+      await channel.invokeMethod('openUrl', url);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 直接用微信读书 App 打开深链，绕开系统选择器和浏览器。
+  /// 返回是否成功（没装微信读书返回 false）。
+  Future<bool> openWeread(String url) async {
+    try {
+      return await channel.invokeMethod<bool>('openWeread', url) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 让用户挑一个本地书籍文件，原生侧会先复制到缓存目录再返回路径。
+  Future<BookFile?> pickBookFile() async {
+    final result = await channel.invokeMapMethod<String, dynamic>('pickBookFile');
+    if (result == null) return null;
+    final path = result['path'] as String? ?? '';
+    if (path.isEmpty) return null;
+    return BookFile(
+      path: path,
+      name: result['name'] as String? ?? 'book.bin',
+      size: (result['size'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+/// 选中的本地书籍文件。
+class BookFile {
+  final String path, name;
+  final int size;
+  const BookFile({
+    required this.path,
+    required this.name,
+    required this.size,
+  });
 }

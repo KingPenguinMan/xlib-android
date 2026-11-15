@@ -164,8 +164,14 @@ class Book {
   };
 }
 
-class BookPage {
-  final List<Book> books;
+/// 线路官方分类树里的一个节点。
+class ZlibCategory {
+  final int id;
+  final String name;
+  const ZlibCategory(this.id, this.name);
+}
+
+class BookPage {  final List<Book> books;
   final int page, totalPages;
   const BookPage(this.books, this.page, this.totalPages);
   factory BookPage.fromJson(Map<String, dynamic> j, int requested) {

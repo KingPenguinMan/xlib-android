@@ -302,8 +302,7 @@ Future<void> guarded(
 Future<bool> showLogin(
   BuildContext context,
   ReaderController controller,
-) async =>
-    await showModalBottomSheet<bool>(
+) async =>    await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -614,3 +613,62 @@ Future<void> showRoutes(BuildContext context, ReaderController c) =>
         ),
       ),
     );
+
+/// 列表下滑后浮现的「搜索 + 回到顶部」按钮组。
+///
+/// 页面滑到深处时，顶部入口和搜索入口都够不着，这两个按钮负责把它们拉回来。
+/// [tag] 用来区分不同页面的 heroTag，避免同一屏出现两个 FAB 时冲突。
+class ScrollQuickActions extends StatelessWidget {
+  final bool visible;
+  final String tag;
+  final VoidCallback onTop;
+  final VoidCallback? onSearch;
+  const ScrollQuickActions({
+    super.key,
+    required this.visible,
+    required this.tag,
+    required this.onTop,
+    this.onSearch,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return AnimatedSlide(
+      offset: visible ? Offset.zero : const Offset(0, .35),
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 180),
+        child: IgnorePointer(
+          ignoring: !visible,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (onSearch != null) ...[
+                FloatingActionButton.small(
+                  heroTag: '$tag-search',
+                  tooltip: '搜索',
+                  onPressed: onSearch,
+                  backgroundColor: colors.primaryContainer,
+                  foregroundColor: colors.onPrimaryContainer,
+                  child: const Icon(Icons.search, size: 20),
+                ),
+                const SizedBox(height: 10),
+              ],
+              FloatingActionButton.small(
+                heroTag: '$tag-top',
+                tooltip: '回到顶部',
+                onPressed: onTop,
+                backgroundColor: colors.surfaceContainerHighest,
+                foregroundColor: colors.onSurfaceVariant,
+                child: const Icon(Icons.arrow_upward, size: 20),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

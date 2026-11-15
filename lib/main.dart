@@ -8,10 +8,14 @@ import 'controller.dart';
 import 'widgets.dart';
 import 'screens.dart';
 import 'reading_invite.dart';
+import 'weread/weread_controller.dart';
+import 'weread/weread_screens.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(ReaderApp(controller: ReaderController()));
+  runApp(
+    ReaderApp(controller: ReaderController(), weread: WereadController()),
+  );
 }
 
 ThemeData readerTheme(Brightness brightness) {
@@ -114,8 +118,14 @@ ThemeData readerTheme(Brightness brightness) {
 
 class ReaderApp extends StatefulWidget {
   final ReaderController controller;
+  final WereadController weread;
   final bool autoStart;
-  const ReaderApp({super.key, required this.controller, this.autoStart = true});
+  const ReaderApp({
+    super.key,
+    required this.controller,
+    required this.weread,
+    this.autoStart = true,
+  });
   @override
   State<ReaderApp> createState() => _ReaderAppState();
 }
@@ -139,20 +149,29 @@ class _ReaderAppState extends State<ReaderApp> {
       theme: readerTheme(Brightness.light),
       darkTheme: readerTheme(Brightness.dark),
       themeMode: widget.controller.theme,
-      home: AppShell(controller: widget.controller),
+      home: AppShell(controller: widget.controller, weread: widget.weread),
     ),
   );
 }
 
 class AppShell extends StatefulWidget {
   final ReaderController controller;
-  const AppShell({super.key, required this.controller});
+  final WereadController weread;
+  const AppShell({
+    super.key,
+    required this.controller,
+    required this.weread,
+  });
   @override
   State<AppShell> createState() => _AppShellState();
 }
 
 class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   bool _promptsStarted = false;
+
+  /// IndexedStack 会预构建所有子页，微信读书页改为首次访问后再创建，
+  /// 免得每次启动都去读密钥库和微信接口。
+  bool _wereadVisited = false;
   Future<void> _startupPrompts() async {
     if (!mounted) return;
     if (!c.hideGroupInvite) {
@@ -172,6 +191,28 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         }
       }
       if (choice?.join == true) await _open(kReadingClubUrl);
+    }
+    await _maybePromptUpdate();
+  }
+
+  /// 检查 Gitee 上有没有新版本，有则弹更新提醒（可勾选以后不再弹出）。
+  Future<void> _maybePromptUpdate() async {
+    if (c.hideUpdatePrompt) return;
+    await c.loadReleases();
+    if (!mounted) return;
+    final update = c.latestUpdate();
+    if (update == null) return;
+    final hide = await showDialog<bool>(
+      context: context,
+      builder: (_) => UpdatePrompt(release: update),
+    );
+    if (hide == true) {
+      c.hideUpdatePrompt = true;
+      try {
+        await c.persist();
+      } catch (_) {
+        c.hideUpdatePrompt = false;
+      }
     }
   }
 
@@ -193,7 +234,16 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   }
 
   void _notice() {
-    if (!mounted || c.noticeId == _noticeId) return;
+    if (!mounted) return;
+    // 搜索页里点「去连接」也会切到这个 tab，同样要按需构建。
+    if (c.selectedTab == 2 && !_wereadVisited) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_wereadVisited) {
+          setState(() => _wereadVisited = true);
+        }
+      });
+    }
+    if (c.noticeId == _noticeId) return;
     _noticeId = c.noticeId;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted)
@@ -214,6 +264,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     c.removeListener(_notice);
+    widget.weread.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -299,8 +350,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         child: IndexedStack(
           index: c.selectedTab,
           children: [
-            SearchScreen(controller: c),
+            SearchScreen(controller: c, weread: widget.weread),
             HistoryScreen(controller: c),
+            _wereadVisited
+                ? WereadScreen(controller: widget.weread)
+                : const SizedBox.shrink(),
           ],
         ),
       ),
@@ -316,7 +370,12 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         indicatorColor: colors.primary.withValues(alpha: .10),
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         selectedIndex: c.selectedTab,
-        onDestinationSelected: c.setTab,
+        onDestinationSelected: (index) {
+          if (index == 2 && !_wereadVisited) {
+            setState(() => _wereadVisited = true);
+          }
+          c.setTab(index);
+        },
         destinations: [
           const NavigationDestination(
             icon: Icon(Icons.menu_book_outlined),
@@ -327,6 +386,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
             icon: Icon(Icons.history_outlined),
             selectedIcon: Icon(Icons.history_rounded),
             label: '历史',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.auto_stories_outlined),
+            selectedIcon: Icon(Icons.auto_stories_rounded),
+            label: '微信读书',
           ),
         ],
       ),

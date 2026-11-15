@@ -6,6 +6,58 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'domain.dart';
 import 'native.dart';
+import 'update.dart';
+
+/// 首页的一个分区。
+///
+/// 三种来源：
+/// - [categoryId] 有值：走线路的官方分类页
+/// - [yearFrom] 有值：按出版年过滤的检索
+/// - 否则：按 [query] 关键词检索
+class HomeSection {
+  final String id;
+  final String title;
+  final String query;
+  final int? yearFrom;
+  final int? categoryId;
+
+  /// 内置分区不能被删除（热门推荐、新书上架）。
+  final bool builtin;
+
+  const HomeSection(
+    this.id,
+    this.title,
+    this.query, {
+    this.yearFrom,
+    this.categoryId,
+    this.builtin = false,
+  });
+
+  bool get isCategory => categoryId != null;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'query': query,
+    if (yearFrom != null) 'yearFrom': yearFrom,
+    if (categoryId != null) 'categoryId': categoryId,
+    if (builtin) 'builtin': true,
+  };
+
+  factory HomeSection.fromJson(Map<String, dynamic> json) {
+    int? asInt(Object? value) => value is int
+        ? value
+        : (value is num ? value.toInt() : int.tryParse('$value'));
+    return HomeSection(
+      textValue(json['id']),
+      textValue(json['title']),
+      textValue(json['query']),
+      yearFrom: asInt(json['yearFrom']),
+      categoryId: asInt(json['categoryId']),
+      builtin: json['builtin'] == true,
+    );
+  }
+}
 
 class ReaderController extends ChangeNotifier {
   final LibraryApi api;
@@ -15,6 +67,9 @@ class ReaderController extends ChangeNotifier {
       native = native ?? NativeBridge();
   String version = '';
   bool hideGroupInvite = false;
+  bool hideUpdatePrompt = false;
+  List<AppRelease> releases = [];
+  bool releasesLoading = false;
   bool ready = false, probing = false, automatic = true, searching = false;
   bool historyLoading = false, profileLoading = false;
   ThemeMode theme = ThemeMode.system;
@@ -33,13 +88,29 @@ class ReaderController extends ChangeNotifier {
       .toList();
   List<String> recent = [];
   List<Book> bookmarks = [];
+  bool bookmarksLoading = false;
+  String bookmarksError = '';
   List<DownloadRecord> downloads = [];
+  final Map<String, String> _downloadLinkCache = {};
   final Set<String> selectedDownloadIds = {};
   BookPage? searchPage, historyPage;
   List<Book> recommendationBooks = [];
   bool recommendationsLoading = false;
   int recommendationPage = 0, recommendationTotalPages = 1;
   bool recommendationHasMore = true;
+
+  /// 首页分类板块：按板块 id 存书单、错误和加载状态。
+  final Map<String, List<Book>> sectionBooks = {};
+  final Map<String, String> sectionErrors = {};
+  final Set<String> sectionLoading = {};
+
+  /// 每个分区当前加载到第几页，以及是否还有下一页。
+  final Map<String, int> sectionPages = {};
+  final Map<String, bool> sectionHasMore = {};
+
+  /// 刷新代次：刷新会 +1，正在飞的「加载更多」回来后发现代次变了就丢弃结果，
+  /// 避免它把刷新后的第一页又覆盖掉。
+  final Map<String, int> sectionEpoch = {};
   final _hiddenHistory = <String, Set<String>>{};
   BookPage? get visibleHistoryPage {
     final page = historyPage;
@@ -70,6 +141,28 @@ class ReaderController extends ChangeNotifier {
       hidden.remove(key);
       changed();
       rethrow;
+    }
+  }
+
+  /// 云端删除一条下载历史，并同步在本机隐藏。
+  /// 只删记录，不删已经下载到本地的文件。
+  Future<void> deleteHistoryRemote(Book book) async {
+    await read((o, s) => api.deleteDownloaded(o, s, book.id));
+    await hideHistory(book);
+  }
+
+  /// 批量删除历史记录：[cloud] 为 true 时同时从账户里删掉。
+  Future<void> deleteHistoryBatch(
+    List<Book> books, {
+    required bool cloud,
+  }) async {
+    if (cloud) {
+      for (final book in books) {
+        await read((o, s) => api.deleteDownloaded(o, s, book.id));
+      }
+    }
+    for (final book in books) {
+      await hideHistory(book);
     }
   }
 
@@ -104,6 +197,7 @@ class ReaderController extends ChangeNotifier {
     try {
       final settings = await native.loadSettings();
       hideGroupInvite = settings['hideGroupInvite'] == true;
+      hideUpdatePrompt = settings['hideUpdatePrompt'] == true;
       version = await native.appVersion();
       automatic = settings['automatic'] != false;
       final savedOrigin = textValue(settings['origin']);
@@ -121,6 +215,17 @@ class ReaderController extends ChangeNotifier {
           .whereType<Map>()
           .map((b) => Book.fromJson(Map<String, dynamic>.from(b)))
           .toList();
+      final savedSections = settings['sections'];
+      sections.clear();
+      if (savedSections is List) {
+        sections.addAll(
+          savedSections
+              .whereType<Map>()
+              .map((s) => HomeSection.fromJson(Map<String, dynamic>.from(s)))
+              .where((s) => s.id.isNotEmpty),
+        );
+      }
+      if (sections.isEmpty) sections.addAll(defaultSections());
       directory = await native.directoryLabel();
       session = await native.loadSession();
       final hidden = settings['hiddenHistory'];
@@ -150,6 +255,7 @@ class ReaderController extends ChangeNotifier {
     await (_firstRoute?.future ?? scan);
     if (loggedIn && healthyCount > 0) unawaited(loadProfile());
     if (loggedIn && healthyCount > 0) unawaited(loadRecommendations());
+    if (loggedIn && healthyCount > 0) unawaited(loadBookmarks());
     if (loggedIn && historyPage != null && healthyCount > 0) {
       unawaited(_hydrateHistoryCovers());
     }
@@ -157,6 +263,7 @@ class ReaderController extends ChangeNotifier {
 
   Future<void> persist() => native.saveSettings({
     'hideGroupInvite': hideGroupInvite,
+    'hideUpdatePrompt': hideUpdatePrompt,
     'automatic': automatic,
     'origin': activeOrigin,
     'theme': theme.name,
@@ -164,6 +271,7 @@ class ReaderController extends ChangeNotifier {
     'bookmarks': bookmarks.map((b) => b.toJson()).toList(),
     'hiddenHistory': _hiddenHistory.map((k, v) => MapEntry(k, v.toList())),
     'historyCache': _historyCache,
+    'sections': sections.map((s) => s.toJson()).toList(),
   });
   Future<void> setTheme(ThemeMode value) async {
     theme = value;
@@ -218,17 +326,86 @@ class ReaderController extends ChangeNotifier {
     await refreshDownloads();
   }
 
+  /// 收藏 / 取消收藏。先乐观更新本地，再同步到 zlib 云端收藏，
+  /// 这样同一账号在其他设备登录也能看到。云端失败会回滚本地并抛错。
   Future<void> toggleBookmark(Book book) async {
-    if (bookmarked(book)) {
+    final wasBookmarked = bookmarked(book);
+    if (wasBookmarked) {
       bookmarks.removeWhere((b) => b.ref == book.ref);
     } else {
       bookmarks.insert(0, book);
     }
     changed();
     await persist();
+    if (!loggedIn) return;
+    try {
+      await read(
+        (o, s) => wasBookmarked
+            ? api.unsaveBook(o, s, book.id)
+            : api.saveBook(o, s, book.id),
+      );
+    } catch (_) {
+      // 云端没同步成，回滚本地，避免本地和云端不一致。
+      if (wasBookmarked) {
+        bookmarks.insert(0, book);
+      } else {
+        bookmarks.removeWhere((b) => b.ref == book.ref);
+      }
+      changed();
+      await persist();
+      rethrow;
+    }
+  }
+
+  /// 拉取 zlib 云端收藏，覆盖本地缓存（离线时仍可看上次同步的结果）。
+  Future<void> loadBookmarks() async {
+    if (bookmarksLoading || !loggedIn) return;
+    bookmarksLoading = true;
+    bookmarksError = '';
+    changed();
+    try {
+      final all = <Book>[];
+      var page = 1;
+      while (true) {
+        final result = await read((o, s) => api.savedBooks(o, s, page));
+        all.addAll(result.books);
+        if (result.books.isEmpty || result.page >= result.totalPages) break;
+        page++;
+      }
+      bookmarks = all;
+      await persist();
+    } catch (e) {
+      bookmarksError = '$e';
+    } finally {
+      bookmarksLoading = false;
+      changed();
+    }
   }
 
   bool bookmarked(Book book) => bookmarks.any((b) => b.ref == book.ref);
+
+  /// 拉取 Gitee 上的版本历史（供「版本历史」页和更新检查用）。
+  Future<void> loadReleases() async {
+    if (releasesLoading) return;
+    releasesLoading = true;
+    changed();
+    try {
+      releases = await fetchReleases();
+    } finally {
+      releasesLoading = false;
+      changed();
+    }
+  }
+
+  /// 找出比当前安装版本更新的最新 release，找不到返回 null。
+  AppRelease? latestUpdate() {
+    for (final release in releases) {
+      if (release.draft || release.prerelease) continue;
+      if (isNewerVersion(release.version, version)) return release;
+    }
+    return null;
+  }
+
   Future<void> removeRecent(String keyword) async {
     recent.remove(keyword);
     changed();
@@ -460,6 +637,10 @@ class ReaderController extends ChangeNotifier {
         ...recommendationBooks,
         ...result.books.where((book) => seen.add(_historyIdentity(book))),
       ];
+      // 下拉刷新时打乱第一页，刷新完能看到新顺序。
+      if (refresh) {
+        recommendationBooks = [...recommendationBooks]..shuffle();
+      }
       recommendationPage = result.page > recommendationPage
           ? result.page
           : requestedPage;
@@ -476,6 +657,195 @@ class ReaderController extends ChangeNotifier {
     } finally {
       recommendationsLoading = false;
       changed();
+    }
+  }
+
+  /// 首页分区列表，用户可增删和拖动排序，保存在设置里。
+  /// 给默认初值，保证连 init() 都还没跑时页面也有内容可渲染。
+  final List<HomeSection> sections = defaultSections();
+
+  /// 线路官方分类缓存，第一次打开「添加分区」时才拉。
+  List<ZlibCategory> zlibCategories = [];
+  bool categoriesLoading = false;
+  String categoriesError = '';
+
+  static List<HomeSection> defaultSections() => [
+    const HomeSection('popular', '热门推荐', '热门', builtin: true),
+    HomeSection(
+      'new',
+      '新书上架',
+      '',
+      yearFrom: DateTime.now().year - 1,
+      builtin: true,
+    ),
+  ];
+
+  /// 增加一个分区（追加到末尾）。
+  void addSection(HomeSection section) {
+    if (sections.any((s) => s.id == section.id)) return;
+    sections.add(section);
+    changed();
+    unawaited(persist());
+    unawaited(loadSection(section));
+  }
+
+  /// 恢复首次安装时的分区顺序：热门推荐第一、新书上架第二。
+  void resetSections() {
+    sections
+      ..clear()
+      ..addAll(defaultSections());
+    changed();
+    unawaited(persist());
+  }
+
+  /// 删除一个分区，内置的不能删。
+  void removeSection(String id) {
+    final index = sections.indexWhere((s) => s.id == id);
+    if (index < 0 || sections[index].builtin) return;
+    sections.removeAt(index);
+    sectionBooks.remove(id);
+    sectionErrors.remove(id);
+    sectionPages.remove(id);
+    sectionHasMore.remove(id);
+    sectionEpoch.remove(id);
+    changed();
+    unawaited(persist());
+  }
+
+  /// 拖动排序。
+  void reorderSections(int oldIndex, int newIndex) {
+    if (oldIndex < 0 || oldIndex >= sections.length) return;
+    var target = newIndex;
+    if (target > oldIndex) target -= 1;
+    if (target < 0 || target >= sections.length) return;
+    final item = sections.removeAt(oldIndex);
+    sections.insert(target, item);
+    changed();
+    unawaited(persist());
+  }
+
+  /// 拉取线路官方分类清单。
+  Future<void> loadCategories() async {
+    if (categoriesLoading || zlibCategories.isNotEmpty) return;
+    categoriesLoading = true;
+    categoriesError = '';
+    changed();
+    try {
+      zlibCategories = await read((o, s) => api.categories(o));
+    } catch (error) {
+      categoriesError = '$error';
+    } finally {
+      categoriesLoading = false;
+      changed();
+    }
+  }
+
+  /// 顺序加载各板块，避免一次打太多请求触发线路限流。
+  /// 下拉刷新时重新拉取已经打开过的分类。
+  ///
+  /// 没打开过的分类不预先请求：线路对短时间内的连续检索比较敏感，
+  /// 一次打五个很容易握手失败。
+  Future<void> refreshLoadedSections() async {
+    if (!loggedIn || healthyCount == 0) return;
+    for (final spec in sections) {
+      if (!sectionBooks.containsKey(spec.id)) continue;
+      await loadSection(spec);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+  }
+
+  /// 打乱热门推荐当前书单，纯本地、立即生效。
+  void shuffleRecommendations() {
+    if (recommendationBooks.length < 2) return;
+    recommendationBooks = [...recommendationBooks]..shuffle();
+    changed();
+  }
+
+  /// 加载（或下拉刷新）分区的第一页，会替换现有列表。
+  /// 刷新可以抢占正在进行的「加载更多」，不会被加载状态挡住。
+  Future<void> loadSection(HomeSection spec) {
+    final epoch = (sectionEpoch[spec.id] ?? 0) + 1;
+    sectionEpoch[spec.id] = epoch;
+    return _loadSectionPage(spec, 1, append: false, epoch: epoch, force: true);
+  }
+
+  /// 往下滑到底时追加下一页，书单可以一直往下延伸。
+  Future<void> loadMoreSection(HomeSection spec) async {
+    if (sectionLoading.contains(spec.id)) return;
+    if (sectionHasMore[spec.id] != true) return;
+    final epoch = sectionEpoch[spec.id] ?? 0;
+    final next = (sectionPages[spec.id] ?? 1) + 1;
+    await _loadSectionPage(spec, next, append: true, epoch: epoch);
+  }
+
+  /// 打乱某个分区当前已加载图书的顺序。
+  ///
+  /// 这是纯本地操作，不走网络、不受正在进行的加载影响，
+  /// 所以在任何滚动位置点「换一批」都能立刻看到变化。
+  void shuffleSection(HomeSection spec) {
+    final books = sectionBooks[spec.id];
+    if (books == null || books.length < 2) return;
+    sectionBooks[spec.id] = [...books]..shuffle();
+    changed();
+  }
+
+  bool _epochStillValid(String id, int epoch) =>
+      (sectionEpoch[id] ?? 0) == epoch;
+
+  Future<void> _loadSectionPage(
+    HomeSection spec,
+    int page, {
+    required bool append,
+    required int epoch,
+    bool force = false,
+  }) async {
+    if (!force && sectionLoading.contains(spec.id)) return;
+    sectionLoading.add(spec.id);
+    if (force) sectionErrors.remove(spec.id);
+    changed();
+    try {
+      final result = await read((o, s) {
+        if (spec.isCategory) {
+          return api.categoryBooks(o, spec.categoryId!, page);
+        }
+        return api.search(
+          o,
+          s,
+          spec.query,
+          page,
+          '',
+          'chinese',
+          yearFrom: spec.yearFrom,
+        );
+      });
+      // 期间发生过刷新，这次「加载更多」的结果直接作废。
+      if (!_epochStillValid(spec.id, epoch)) return;
+      final existing = append
+          ? (sectionBooks[spec.id] ?? const <Book>[])
+          : const <Book>[];
+      final seen = existing.map(_historyIdentity).toSet();
+      final merged = <Book>[
+        ...existing,
+        ...result.books.where((book) => seen.add(_historyIdentity(book))),
+      ];
+      // 下拉刷新（重新拉第一页）时打乱顺序，保证刷新有肉眼可见的变化。
+      sectionBooks[spec.id] = append ? merged : (merged..shuffle());
+      sectionPages[spec.id] = result.page;
+      // 分类页会明确给出「还有下一页」；搜索接口偶尔不给总页数，
+      // 这时按是否返回了满页来兜底，避免只能看一页。
+      final total = result.totalPages > 0
+          ? result.totalPages
+          : result.page + (result.books.length >= 20 ? 1 : 0);
+      sectionHasMore[spec.id] = result.page < total && result.books.isNotEmpty;
+    } catch (error) {
+      if (!_epochStillValid(spec.id, epoch)) return;
+      sectionErrors[spec.id] = '$error';
+    } finally {
+      // 只有当前代次能清加载状态，避免并发请求互相把状态踩掉。
+      if (_epochStillValid(spec.id, epoch)) {
+        sectionLoading.remove(spec.id);
+        changed();
+      }
     }
   }
 
@@ -614,6 +984,7 @@ class ReaderController extends ChangeNotifier {
   Future<bool> startDownload(
     Book book, {
     required Future<void> Function(DownloadRecord) onExistingFile,
+    bool refreshLink = false,
   }) async {
     if (resolvingDownloads.contains(book.id) ||
         downloads.any((d) => d.active && d.book.id == book.id)) {
@@ -642,7 +1013,11 @@ class ReaderController extends ChangeNotifier {
       await ensureRoute();
       final s = session!;
       final origin = activeOrigin;
-      final link = await api.fileUrl(origin, s, book);
+      // 复用本次会话内拿到的链接，避免「失败重试」重复消耗下载额度；
+      // 只有明确要求刷新（refreshLink）才重新向服务器要链接。
+      final cached = refreshLink ? null : _downloadLinkCache[book.ref];
+      final link = cached ?? await api.fileUrl(origin, s, book);
+      _downloadLinkCache[book.ref] = link;
       await native.download(book, link, api.downloadHeaders(origin, s), origin);
       await refreshDownloads();
       say('已加入下载队列，可在侧边栏「下载任务」查看');

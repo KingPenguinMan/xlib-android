@@ -2,6 +2,7 @@ import 'package:bookisle/controller.dart';
 import 'package:bookisle/domain.dart';
 import 'package:bookisle/main.dart';
 import 'package:bookisle/screens.dart';
+import 'package:bookisle/weread/weread_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -31,8 +32,10 @@ void main() {
         ..recommendationBooks = books
         ..recommendationHasMore = false;
       addTearDown(c.dispose);
+      final weread = WereadController();
+      addTearDown(weread.dispose);
       for (final screen in [
-        SearchScreen(controller: c),
+        SearchScreen(controller: c, weread: weread),
         HistoryScreen(controller: c),
         ProfileScreen(controller: c),
       ]) {

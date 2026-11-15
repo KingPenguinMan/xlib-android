@@ -2,6 +2,7 @@ import 'package:bookisle/controller.dart';
 import 'package:bookisle/domain.dart';
 import 'package:bookisle/native.dart';
 import 'package:bookisle/screens.dart';
+import 'package:bookisle/weread/weread_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -26,9 +27,11 @@ void main() {
     tester,
   ) async {
     final c = ReaderController(native: MemoryBridge())..recent = ['测试关键词'];
+    final weread = WereadController();
+    addTearDown(weread.dispose);
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(body: SearchScreen(controller: c)),
+        home: Scaffold(body: SearchScreen(controller: c, weread: weread)),
       ),
     );
     expect(find.text('测试关键词'), findsNothing);

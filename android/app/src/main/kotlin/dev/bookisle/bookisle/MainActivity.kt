@@ -9,6 +9,9 @@ import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.content.ContentValues
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
@@ -20,8 +23,13 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.KeyStore
 import java.util.UUID
 import java.util.concurrent.Executors
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 class MainActivity : FlutterActivity() {
     companion object {
@@ -30,6 +38,8 @@ class MainActivity : FlutterActivity() {
         private const val CHANNEL = "dev.bookisle/native"
         private const val PICK_DIRECTORY = 1441
         private const val REQUEST_STORAGE_PERMISSION = 1442
+        private const val PICK_BOOK_FILE = 1443
+        private const val WEREAD_KEY_ALIAS = "bookisle_weread_session"
     }
     private data class PendingDownload(
         val id: String,
@@ -42,6 +52,7 @@ class MainActivity : FlutterActivity() {
     private val pendingStorageDownloads = mutableListOf<PendingDownload>()
     private var storagePermissionRequestInFlight = false
     private var pendingDirectory: MethodChannel.Result? = null
+    private var pendingBookFile: MethodChannel.Result? = null
 
     override fun onCreate(state: Bundle?) { super.onCreate(state); prefs = getSharedPreferences("bookisle", MODE_PRIVATE); loadRecords() }
     override fun configureFlutterEngine(engine: FlutterEngine) {
@@ -87,11 +98,44 @@ class MainActivity : FlutterActivity() {
                     else removeRecord(args as? String ?: "", false)
                     result.success(null)
                 }
-                "openUrl" -> { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(call.arguments as String))); result.success(null) }
+                "openUrl" -> openUrl(call.arguments as? String ?: "", result)
+                "openWeread" -> openWeread(call.arguments as? String ?: "", result)
+                "readWereadSession" -> result.success(readWereadSession())
+                "writeWereadSession" -> { writeWereadSession(call.arguments as? String ?: ""); result.success(null) }
+                "deleteWereadSession" -> { prefs.edit().remove("wereadSession").apply(); result.success(null) }
+                "pickBookFile" -> pickBookFile(result)
                 else -> result.notImplemented()
             }
         }
     }
+    // 打开外部链接（网页，或微信读书的 weread:// 深链）。
+    // 没装对应应用时返回错误而不是崩溃，交给 Dart 侧回退到网页版。
+    private fun openUrl(url: String, result: MethodChannel.Result) {
+        if (url.isEmpty()) { result.error("EMPTY", "链接为空", null); return }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            result.success(null)
+        } catch (_: android.content.ActivityNotFoundException) {
+            result.error("NO_APP", "没有可以打开这个链接的应用", null)
+        }
+    }
+
+    // 直接用微信读书 App（com.tencent.weread）打开深链，不经过系统选择器、
+    // 不会被浏览器抢走。返回是否成功（没装微信读书返回 false）。
+    private fun openWeread(url: String, result: MethodChannel.Result) {
+        if (url.isEmpty()) { result.success(false); return }
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                setPackage("com.tencent.weread")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            result.success(true)
+        } catch (_: Exception) {
+            result.success(false)
+        }
+    }
+
     private fun loadRecords() {
         if (restored) return
         val saved = runCatching { JSONArray(prefs.getString("downloads", "[]")) }.getOrElse { JSONArray() }
@@ -122,7 +166,7 @@ class MainActivity : FlutterActivity() {
         ?: "Download/Books"
     private fun directoryUri(): Uri? = prefs.getString("directory", null)?.let { Uri.parse(it) }
     private fun chooseDirectory(result: MethodChannel.Result) { pendingDirectory = result; startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply { addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) }, PICK_DIRECTORY) }
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) { super.onActivityResult(requestCode, resultCode, data); if (requestCode != PICK_DIRECTORY) return; val callback = pendingDirectory; pendingDirectory = null; if (resultCode != Activity.RESULT_OK || data?.data == null) { callback?.success(null); return }; val uri = data.data!!; try { contentResolver.takePersistableUriPermission(uri, data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) } catch (_: Exception) {}; val label = queryTreeName(uri) ?: "自定义下载目录"; prefs.edit().putString("directory", uri.toString()).putString("directoryLabel", label).apply(); callback?.success(mapOf("uri" to uri.toString(), "label" to label)) }
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) { super.onActivityResult(requestCode, resultCode, data); if (requestCode == PICK_BOOK_FILE) { handleBookFile(resultCode, data); return }; if (requestCode != PICK_DIRECTORY) return; val callback = pendingDirectory; pendingDirectory = null; if (resultCode != Activity.RESULT_OK || data?.data == null) { callback?.success(null); return }; val uri = data.data!!; try { contentResolver.takePersistableUriPermission(uri, data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) } catch (_: Exception) {}; val label = queryTreeName(uri) ?: "自定义下载目录"; prefs.edit().putString("directory", uri.toString()).putString("directoryLabel", label).apply(); callback?.success(mapOf("uri" to uri.toString(), "label" to label)) }
     private fun queryTreeName(uri: Uri): String? = try { contentResolver.query(uri, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null } } catch (_: Exception) { null }
     private fun startDownload(args: Map<*, *>, result: MethodChannel.Result) {
         val bookJson = JSONObject(args["book"] as? String ?: "{}")
@@ -353,5 +397,74 @@ class MainActivity : FlutterActivity() {
         val uri = Uri.parse(args["uri"] as? String ?: "")
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = mime(args["fileName"] as? String ?: ""); putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "分享图书"))
         result.success(null)
+    }
+
+    // ── 本地书籍导入：选文件后复制到 cache，Dart 侧再流式上传到微信读书 ──
+    private fun pickBookFile(result: MethodChannel.Result) {
+        pendingBookFile = result
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }, PICK_BOOK_FILE)
+    }
+    private fun handleBookFile(resultCode: Int, data: Intent?) {
+        val callback = pendingBookFile
+        pendingBookFile = null
+        val uri = data?.data
+        if (resultCode != Activity.RESULT_OK || uri == null) { callback?.success(null); return }
+        executor.execute {
+            try {
+                val name = queryOpenableName(uri) ?: "book.bin"
+                val dir = File(cacheDir, "weread-import").apply { mkdirs() }
+                val target = File(dir, name.replace(Regex("[/\\\\]"), "_"))
+                contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(target).use { output -> input.copyTo(output, 256 * 1024) }
+                } ?: throw IllegalStateException("无法读取所选文件")
+                runOnUiThread { callback?.success(mapOf("path" to target.absolutePath, "name" to name, "size" to target.length())) }
+            } catch (e: Exception) {
+                runOnUiThread { callback?.error("PICK_FAILED", e.message ?: "读取文件失败", null) }
+            }
+        }
+    }
+    private fun queryOpenableName(uri: Uri): String? = try {
+        contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+            if (it.moveToFirst()) it.getString(0) else null
+        }
+    } catch (_: Exception) { null }
+
+    // ── 微信读书登录凭据：AES-GCM 加密后存进私有 prefs，密钥留在 AndroidKeyStore ──
+    private fun wereadKey(): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (store.getKey(WEREAD_KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(
+            KeyGenParameterSpec.Builder(WEREAD_KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .build()
+        )
+        return generator.generateKey()
+    }
+    private fun readWereadSession(): String? {
+        val raw = prefs.getString("wereadSession", null) ?: return null
+        return try {
+            val bytes = Base64.decode(raw, Base64.NO_WRAP)
+            val iv = bytes.copyOfRange(0, 12)
+            val payload = bytes.copyOfRange(12, bytes.size)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, wereadKey(), GCMParameterSpec(128, iv))
+            String(cipher.doFinal(payload), Charsets.UTF_8)
+        } catch (e: Exception) {
+            // 密钥被系统清除（换机、重置生物识别）后旧密文无法解开，按未连接处理。
+            prefs.edit().remove("wereadSession").apply()
+            null
+        }
+    }
+    private fun writeWereadSession(value: String) {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, wereadKey())
+        val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+        val bytes = cipher.iv + encrypted
+        prefs.edit().putString("wereadSession", Base64.encodeToString(bytes, Base64.NO_WRAP)).apply()
     }
 }

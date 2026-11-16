@@ -286,19 +286,7 @@ class _SearchScreenState extends State<SearchScreen>
               ),
             ),
             ...[
-              if (!c.loggedIn)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: EmptyState(
-                    icon: Icons.auto_stories_outlined,
-                    title: '登录后查看热门推荐',
-                    message: '登录账户后可浏览推荐书籍、搜索并下载。',
-                    action: '登录',
-                    onAction: () => showLogin(context, c),
-                  ),
-                )
-              else if (c.recommendationsLoading &&
-                  c.recommendationBooks.isEmpty)
+              if (c.recommendationsLoading && c.recommendationBooks.isEmpty)
                 const SliverFillRemaining(
                   hasScrollBody: false,
                   child: Center(child: CircularProgressIndicator()),
@@ -308,8 +296,10 @@ class _SearchScreenState extends State<SearchScreen>
                   hasScrollBody: false,
                   child: EmptyState(
                     icon: Icons.auto_awesome_outlined,
-                    title: '暂时没有推荐书籍',
-                    message: '网络恢复后可以重新加载。',
+                    title: c.loggedIn ? '暂时没有推荐书籍' : '暂时没有热门书籍',
+                    message: c.loggedIn
+                        ? '网络恢复后可以重新加载。'
+                        : '网络恢复后可以重新加载，也可以直接搜索或浏览分类。',
                     action: '重新加载',
                     onAction: () => c.loadRecommendations(refresh: true),
                   ),
@@ -1892,12 +1882,19 @@ Future<void> showBookDetails(
   BuildContext context,
   ReaderController c,
   Book initial,
-) => showModalBottomSheet<void>(
-  context: context,
-  isScrollControlled: true,
-  useSafeArea: true,
-  builder: (_) => BookDetailsSheet(controller: c, initial: initial),
-);
+) async {
+  // 未登录时看不了详情（服务端要求登录），先引导登录。
+  if (!c.loggedIn) {
+    await showLogin(context, c);
+    return;
+  }
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (_) => BookDetailsSheet(controller: c, initial: initial),
+  );
+}
 
 class BookDetailsSheet extends StatefulWidget {
   final ReaderController controller;

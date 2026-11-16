@@ -353,7 +353,7 @@ class LibraryApi {
 
   Future<BookPage> search(
     String origin,
-    Session session,
+    Session? session,
     String query,
     int page,
     String format,

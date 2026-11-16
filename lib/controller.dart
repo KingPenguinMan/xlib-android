@@ -543,6 +543,33 @@ class ReaderController extends ChangeNotifier {
     throw last ?? const ApiException('没有可用线路，请重新检测', retryable: true);
   }
 
+  /// 不需要登录态的请求：未登录也能搜索、浏览官方分类。
+  Future<T> readAnon<T>(Future<T> Function(String origin) request) async {
+    await ensureRoute();
+    final alternatives = routes.where((r) => r.usable).toList()
+      ..sort((a, b) => a.milliseconds.compareTo(b.milliseconds));
+    final candidates = <String>{
+      activeOrigin,
+      if (automatic) ...alternatives.map((r) => r.effectiveOrigin),
+    }.take(3);
+    ApiException? last;
+    for (final origin in candidates) {
+      try {
+        final value = await request(origin);
+        if (origin != activeOrigin) {
+          activeOrigin = origin;
+          await persist();
+          say('已自动切换到 ${Uri.parse(origin).host}');
+        }
+        return value;
+      } on ApiException catch (e) {
+        if (!e.retryable || !automatic) rethrow;
+        last = e;
+      }
+    }
+    throw last ?? const ApiException('没有可用线路，请重新检测', retryable: true);
+  }
+
   Future<void> login(String email, String password) async {
     await ensureRoute();
     final s = await api.login(activeOrigin, email.trim(), password);
@@ -593,9 +620,14 @@ class ReaderController extends ChangeNotifier {
     selectedTab = 0;
     changed();
     try {
-      final result = await read(
-        (o, s) => api.search(o, s, input, page, format, language),
-      );
+      // 未登录也能搜索：zlib 的搜索接口不需要账号。
+      final result = loggedIn
+          ? await read(
+              (o, s) => api.search(o, s, input, page, format, language),
+            )
+          : await readAnon(
+              (o) => api.search(o, null, input, page, format, language),
+            );
       if (generation != _searchGeneration) return;
       searchPage = result;
       recent.remove(input);
@@ -615,7 +647,8 @@ class ReaderController extends ChangeNotifier {
   Future<Book> details(Book book) => read((o, s) => api.details(o, s, book));
 
   Future<void> loadRecommendations({bool refresh = false}) async {
-    if (!loggedIn || recommendationsLoading) return;
+    // 未登录也能看「热门」：走匿名搜索，首页不再是空的。
+    if (recommendationsLoading) return;
     if (refresh) {
       recommendationPage = 0;
       recommendationTotalPages = 1;
@@ -627,9 +660,13 @@ class ReaderController extends ChangeNotifier {
     changed();
     try {
       final requestedPage = recommendationPage + 1;
-      final result = await read(
-        (o, s) => api.search(o, s, '热门', requestedPage, '', ''),
-      );
+      final result = loggedIn
+          ? await read(
+              (o, s) => api.search(o, s, '热门', requestedPage, '', ''),
+            )
+          : await readAnon(
+              (o) => api.search(o, null, '热门', requestedPage, '', ''),
+            );
       final previousCount = recommendationBooks.length;
       final seen = <String>{};
       seen.addAll(recommendationBooks.map(_historyIdentity));
@@ -731,7 +768,7 @@ class ReaderController extends ChangeNotifier {
     categoriesError = '';
     changed();
     try {
-      zlibCategories = await read((o, s) => api.categories(o));
+      zlibCategories = await readAnon((o) => api.categories(o));
     } catch (error) {
       categoriesError = '$error';
     } finally {
@@ -746,7 +783,7 @@ class ReaderController extends ChangeNotifier {
   /// 没打开过的分类不预先请求：线路对短时间内的连续检索比较敏感，
   /// 一次打五个很容易握手失败。
   Future<void> refreshLoadedSections() async {
-    if (!loggedIn || healthyCount == 0) return;
+    if (healthyCount == 0) return;
     for (final spec in sections) {
       if (!sectionBooks.containsKey(spec.id)) continue;
       await loadSection(spec);
@@ -804,20 +841,25 @@ class ReaderController extends ChangeNotifier {
     if (force) sectionErrors.remove(spec.id);
     changed();
     try {
-      final result = await read((o, s) {
+      // 分区浏览不需要登录：官方分类页和搜索接口都可以匿名访问。
+      Future<BookPage> load(String origin, Session? session) {
         if (spec.isCategory) {
-          return api.categoryBooks(o, spec.categoryId!, page);
+          return api.categoryBooks(origin, spec.categoryId!, page);
         }
         return api.search(
-          o,
-          s,
+          origin,
+          session,
           spec.query,
           page,
           '',
           'chinese',
           yearFrom: spec.yearFrom,
         );
-      });
+      }
+
+      final result = loggedIn
+          ? await read((o, s) => load(o, s))
+          : await readAnon((o) => load(o, null));
       // 期间发生过刷新，这次「加载更多」的结果直接作废。
       if (!_epochStillValid(spec.id, epoch)) return;
       final existing = append

@@ -10,6 +10,22 @@ import 'search_download_test.dart' show MemoryBridge;
 class LocalController extends ReaderController {
   LocalController() : super(native: MemoryBridge());
 
+  // 详情页现在未登录会先弹登录；这个测试只验证详情 UI，直接模拟已登录。
+  @override
+  bool get loggedIn => true;
+
+  // 收藏只落本地，测试里不访问网络。
+  @override
+  Future<void> toggleBookmark(Book book) async {
+    if (bookmarks.any((b) => b.ref == book.ref)) {
+      bookmarks.removeWhere((b) => b.ref == book.ref);
+    } else {
+      bookmarks.insert(0, book);
+    }
+    notifyListeners();
+    await persist();
+  }
+
   @override
   Future<Book> details(Book book) async => book;
 

@@ -148,6 +148,17 @@ class _ReaderAppState extends State<ReaderApp> {
       darkTheme: readerTheme(Brightness.dark),
       themeMode: widget.controller.theme,
       home: AppShell(controller: widget.controller, weread: widget.weread),
+      builder: (context, child) => Stack(
+        children: [
+          if (child != null) child,
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 56,
+            child: _GlobalUpdateBar(c: widget.controller),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -344,24 +355,14 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       ),
       body: SafeArea(
         top: false,
-        child: Stack(
+        child: IndexedStack(
+          index: c.selectedTab,
           children: [
-            IndexedStack(
-              index: c.selectedTab,
-              children: [
-                SearchScreen(controller: c, weread: widget.weread),
-                HistoryScreen(controller: c),
-                _wereadVisited
-                    ? WereadScreen(controller: widget.weread)
-                    : const SizedBox.shrink(),
-              ],
-            ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: _UpdateDownloadBar(c: c),
-            ),
+            SearchScreen(controller: c, weread: widget.weread),
+            HistoryScreen(controller: c),
+            _wereadVisited
+                ? WereadScreen(controller: widget.weread)
+                : const SizedBox.shrink(),
           ],
         ),
       ),
@@ -405,10 +406,10 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   }
 }
 
-/// 底部更新下载进度条：显示进度，可暂停 / 继续 / 取消，不阻塞界面。
-class _UpdateDownloadBar extends StatelessWidget {
+/// 全局更新下载进度条：悬浮卡片，所有页面（含详情、搜索、历史版本等）都能看到。
+class _GlobalUpdateBar extends StatelessWidget {
   final ReaderController c;
-  const _UpdateDownloadBar({required this.c});
+  const _GlobalUpdateBar({required this.c});
 
   @override
   Widget build(BuildContext context) {
@@ -418,8 +419,9 @@ class _UpdateDownloadBar extends StatelessWidget {
       builder: (context, _) {
         if (!c.updateDownloading) return const SizedBox.shrink();
         return Material(
-          elevation: 10,
+          elevation: 8,
           color: colors.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(14),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 6, 4, 6),
             child: Row(

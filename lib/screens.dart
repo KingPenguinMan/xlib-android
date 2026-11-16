@@ -3599,9 +3599,8 @@ Future<bool> installReleaseUpdate(
     }
     return false;
   }
-  if (c.updateDownloading) return false;
-  // 后台下载：进度条显示在底部，不阻塞界面。
-  await c.startUpdateDownload(url);
+  // 后台下载：进度条全局显示，不阻塞界面。
+  await c.startUpdateDownload(url, version: release.version);
   return true;
 }
 

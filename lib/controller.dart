@@ -229,6 +229,8 @@ class ReaderController extends ChangeNotifier {
         );
       }
       if (sections.isEmpty) sections.addAll(defaultSections());
+      downloadedApkPath = textValue(settings['downloadedApkPath']);
+      downloadedApkVersion = textValue(settings['downloadedApkVersion']);
       directory = await native.directoryLabel();
       session = await native.loadSession();
       final hidden = settings['hiddenHistory'];
@@ -275,6 +277,8 @@ class ReaderController extends ChangeNotifier {
     'hiddenHistory': _hiddenHistory.map((k, v) => MapEntry(k, v.toList())),
     'historyCache': _historyCache,
     'sections': sections.map((s) => s.toJson()).toList(),
+    'downloadedApkPath': downloadedApkPath,
+    'downloadedApkVersion': downloadedApkVersion,
   });
   Future<void> setTheme(ThemeMode value) async {
     theme = value;
@@ -412,9 +416,26 @@ class ReaderController extends ChangeNotifier {
   /// 后台下载并安装更新：进度通过 [updateProgress] 上报，可暂停 / 取消。
   StreamSubscription<List<int>>? _updateSub;
   bool updatePaused = false;
+  String? downloadedApkPath;
+  String? downloadedApkVersion;
 
-  Future<void> startUpdateDownload(String url) async {
-    if (updateDownloading) return;
+  Future<void> startUpdateDownload(String url, {String? version}) async {
+    if (updateDownloading) {
+      say('正在下载更新，请看下方的进度条');
+      return;
+    }
+    // 已经下载过这个版本，直接安装，不重复下载。
+    if (version != null &&
+        downloadedApkVersion == version &&
+        downloadedApkPath != null &&
+        File(downloadedApkPath!).existsSync()) {
+      say('安装包已就绪，正在打开安装界面');
+      final ok = await native.installApk(downloadedApkPath!);
+      if (!ok) say('请在系统设置里允许本应用安装，然后重新点「立即安装」（无需重新下载）');
+      return;
+    }
+    downloadedApkPath = null;
+    downloadedApkVersion = null;
     updateDownloading = true;
     updatePaused = false;
     updateProgress = 0;
@@ -452,8 +473,14 @@ class ReaderController extends ChangeNotifier {
           updatePaused = false;
           updateProgress = 1;
           changed();
+          downloadedApkPath = file.path;
+          if (version != null) downloadedApkVersion = version;
+          unawaited(persist());
+          say('安装包已下载完成，正在打开安装界面');
           final ok = await native.installApk(file.path);
-          if (!ok) say('请在系统设置里允许本应用安装，然后重新点「立即安装」');
+          if (!ok) {
+            say('请在系统设置里允许本应用安装，然后重新点「立即安装」（无需重新下载）');
+          }
         },
         onError: (Object error) async {
           await sink.close();

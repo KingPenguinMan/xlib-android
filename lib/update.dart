@@ -19,6 +19,7 @@ class AppRelease {
   final String publishedAt; // 发布时间，ISO 8601
   final bool prerelease;
   final bool draft;
+  final Map<String, String> apks; // 架构 -> 附件下载链接
 
   const AppRelease({
     required this.version,
@@ -28,10 +29,20 @@ class AppRelease {
     required this.publishedAt,
     required this.prerelease,
     required this.draft,
+    required this.apks,
   });
 
   factory AppRelease.fromJson(Map<String, dynamic> json) {
     final tag = '${json['tag_name'] ?? ''}';
+    // 从发行版附件里找各架构的 APK（文件名形如 xxx-arm64-v8a.apk）。
+    final apks = <String, String>{};
+    for (final asset in (json['assets'] as List? ?? []).whereType<Map>()) {
+      final name = '${asset['name'] ?? ''}';
+      final url = '${asset['browser_download_url'] ?? ''}';
+      final match = RegExp(r'-(arm64-v8a|armeabi-v7a|x86_64)\.apk$')
+          .firstMatch(name);
+      if (match != null && url.isNotEmpty) apks[match.group(1)!] = url;
+    }
     return AppRelease(
       version: tag.replaceFirst(RegExp('^v'), ''),
       tag: tag,
@@ -40,7 +51,25 @@ class AppRelease {
       publishedAt: '${json['created_at'] ?? ''}',
       prerelease: json['prerelease'] == true,
       draft: json['draft'] == true,
+      apks: apks,
     );
+  }
+
+  /// 在给定架构列表里挑一个可用的 APK 下载链接（按优先级）。
+  String? apkFor(List<String> abis) {
+    for (final abi in abis) {
+      final url = apks[abi];
+      if (url != null && url.isNotEmpty) return url;
+    }
+    return null;
+  }
+
+  /// 与 [apkFor] 对应的架构名，用于界面提示「适配 arm64-v8a」。
+  String? abiFor(List<String> abis) {
+    for (final abi in abis) {
+      if (apks.containsKey(abi)) return abi;
+    }
+    return null;
   }
 
   /// Gitee releases 页面上精准跳到这个版本的锚点链接。
@@ -86,6 +115,12 @@ Future<List<AppRelease>> fetchReleases() async {
 }
 
 /// 把 Markdown 更新说明转成可读的纯文本（去掉链接、强调、标题、列表符号）。
+/// 取更新说明里「## 下载」之前的内容，避免在弹窗/卡片里显示 APK 文件名。
+String releaseNotes(String body) {
+  final idx = body.indexOf('## 下载');
+  return markdownToPlain(idx >= 0 ? body.substring(0, idx) : body);
+}
+
 String markdownToPlain(String markdown) {
   final out = <String>[];
   final lines = markdown.split('\n');

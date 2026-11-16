@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -70,6 +71,8 @@ class ReaderController extends ChangeNotifier {
   bool hideUpdatePrompt = false;
   List<AppRelease> releases = [];
   bool releasesLoading = false;
+  bool updateDownloading = false;
+  double updateProgress = 0;
   bool ready = false, probing = false, automatic = true, searching = false;
   bool historyLoading = false, profileLoading = false;
   ThemeMode theme = ThemeMode.system;
@@ -406,6 +409,98 @@ class ReaderController extends ChangeNotifier {
     return null;
   }
 
+  /// 后台下载并安装更新：进度通过 [updateProgress] 上报，可暂停 / 取消。
+  StreamSubscription<List<int>>? _updateSub;
+  bool updatePaused = false;
+
+  Future<void> startUpdateDownload(String url) async {
+    if (updateDownloading) return;
+    updateDownloading = true;
+    updatePaused = false;
+    updateProgress = 0;
+    changed();
+    try {
+      final dir = await native.updateDir();
+      if (dir.isEmpty) throw Exception('无法获取下载目录');
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 15);
+      final request = await client.getUrl(Uri.parse(url));
+      request.headers.set(HttpHeaders.userAgentHeader, 'z-lib-android');
+      final response = await request.close();
+      if (response.statusCode != 200) {
+        client.close(force: true);
+        throw Exception('下载失败（HTTP ${response.statusCode}）');
+      }
+      final total = response.contentLength;
+      final file = File('${dir.replaceAll('\\', '/')}/update.apk');
+      final sink = file.openWrite();
+      var received = 0;
+      _updateSub = response.listen(
+        (chunk) {
+          sink.add(chunk);
+          received += chunk.length;
+          if (total > 0) {
+            updateProgress = (received / total).clamp(0.0, 1.0);
+            changed();
+          }
+        },
+        onDone: () async {
+          await sink.close();
+          client.close(force: true);
+          _updateSub = null;
+          updateDownloading = false;
+          updatePaused = false;
+          updateProgress = 1;
+          changed();
+          final ok = await native.installApk(file.path);
+          if (!ok) say('请在系统设置里允许本应用安装，然后重新点「立即安装」');
+        },
+        onError: (Object error) async {
+          await sink.close();
+          client.close(force: true);
+          _updateSub = null;
+          updateDownloading = false;
+          updatePaused = false;
+          changed();
+          say('更新下载失败：$error');
+        },
+        cancelOnError: true,
+      );
+    } catch (error) {
+      updateDownloading = false;
+      updatePaused = false;
+      changed();
+      say('更新下载失败：$error');
+    }
+  }
+
+  /// 暂停当前更新下载。
+  void pauseUpdate() {
+    if (!updateDownloading || updatePaused) return;
+    _updateSub?.pause();
+    updatePaused = true;
+    changed();
+  }
+
+  /// 继续被暂停的更新下载。
+  void resumeUpdate() {
+    if (!updateDownloading || !updatePaused) return;
+    _updateSub?.resume();
+    updatePaused = false;
+    changed();
+  }
+
+  /// 取消当前更新下载。
+  void cancelUpdate() {
+    if (!updateDownloading) return;
+    _updateSub?.cancel();
+    _updateSub = null;
+    updateDownloading = false;
+    updatePaused = false;
+    updateProgress = 0;
+    changed();
+  }
+
   Future<void> removeRecent(String keyword) async {
     recent.remove(keyword);
     changed();
@@ -661,9 +756,7 @@ class ReaderController extends ChangeNotifier {
     try {
       final requestedPage = recommendationPage + 1;
       final result = loggedIn
-          ? await read(
-              (o, s) => api.search(o, s, '热门', requestedPage, '', ''),
-            )
+          ? await read((o, s) => api.search(o, s, '热门', requestedPage, '', ''))
           : await readAnon(
               (o) => api.search(o, null, '热门', requestedPage, '', ''),
             );

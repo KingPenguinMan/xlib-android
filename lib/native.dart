@@ -80,6 +80,15 @@ class NativeBridge {
       await channel.invokeMethod<String>('appVersion') ?? '';
   Future<List<String>> supportedAbis() async =>
       await channel.invokeListMethod<String>('supportedAbis') ?? [];
+
+  /// 更新包下载目录（缓存目录，App 卸载后会被清掉）。
+  Future<String> updateDir() async =>
+      await channel.invokeMethod<String>('updateDir') ?? '';
+
+  /// 调起系统安装界面。返回 false 表示需要先允许「安装未知应用」。
+  Future<bool> installApk(String path) async =>
+      await channel.invokeMethod<bool>('installApk', path) ?? false;
+
   Future<void> openUrl(String url) => channel.invokeMethod('openUrl', url);
 
   /// 尝试打开链接，返回是否成功。用于深链（例如 weread://），
@@ -105,7 +114,9 @@ class NativeBridge {
 
   /// 让用户挑一个本地书籍文件，原生侧会先复制到缓存目录再返回路径。
   Future<BookFile?> pickBookFile() async {
-    final result = await channel.invokeMapMethod<String, dynamic>('pickBookFile');
+    final result = await channel.invokeMapMethod<String, dynamic>(
+      'pickBookFile',
+    );
     if (result == null) return null;
     final path = result['path'] as String? ?? '';
     if (path.isEmpty) return null;
@@ -121,9 +132,5 @@ class NativeBridge {
 class BookFile {
   final String path, name;
   final int size;
-  const BookFile({
-    required this.path,
-    required this.name,
-    required this.size,
-  });
+  const BookFile({required this.path, required this.name, required this.size});
 }

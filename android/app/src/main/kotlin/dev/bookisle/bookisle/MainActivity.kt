@@ -91,6 +91,8 @@ class MainActivity : FlutterActivity() {
                     result.success(try { contentResolver.openFileDescriptor(uri, "r")?.use { true } ?: false } catch (_: Exception) { false })
                 }
                 "openFile" -> openFile(call.arguments as Map<*, *>, result)
+                "updateDir" -> result.success(File(cacheDir, "updates").apply { mkdirs() }.absolutePath)
+                "installApk" -> installApk(call.arguments as? String ?: "", result)
                 "shareFile" -> shareFile(call.arguments as Map<*, *>, result)
                 "removeRecord" -> {
                     val args = call.arguments
@@ -374,6 +376,37 @@ class MainActivity : FlutterActivity() {
         }
         records.remove(id); saveRecords()
     }
+    // 调起系统安装界面；返回 false 表示需要先允许「安装未知应用」。
+    private fun installApk(path: String, result: MethodChannel.Result) {
+        try {
+            val file = File(path)
+            if (!file.exists()) {
+                result.error("missing", "安装包不存在，请重新下载", null)
+                return
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+                val intent = Intent(
+                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName"),
+                )
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                result.success(false)
+                return
+            }
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("install", e.message ?: "无法调起安装", null)
+        }
+    }
+
     private fun openFile(args: Map<*, *>, result: MethodChannel.Result) {
         val uri = Uri.parse(args["uri"] as? String ?: "")
         val type = mime(args["fileName"] as? String ?: "")

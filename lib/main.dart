@@ -13,9 +13,7 @@ import 'weread/weread_screens.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(
-    ReaderApp(controller: ReaderController(), weread: WereadController()),
-  );
+  runApp(ReaderApp(controller: ReaderController(), weread: WereadController()));
 }
 
 ThemeData readerTheme(Brightness brightness) {
@@ -157,11 +155,7 @@ class _ReaderAppState extends State<ReaderApp> {
 class AppShell extends StatefulWidget {
   final ReaderController controller;
   final WereadController weread;
-  const AppShell({
-    super.key,
-    required this.controller,
-    required this.weread,
-  });
+  const AppShell({super.key, required this.controller, required this.weread});
   @override
   State<AppShell> createState() => _AppShellState();
 }
@@ -202,17 +196,20 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     if (!mounted) return;
     final update = c.latestUpdate();
     if (update == null) return;
-    final hide = await showDialog<bool>(
+    final result = await showDialog<({bool hide, bool install})>(
       context: context,
-      builder: (_) => UpdatePrompt(release: update),
+      builder: (_) => UpdatePrompt(release: update, controller: c),
     );
-    if (hide == true) {
+    if (result?.hide == true) {
       c.hideUpdatePrompt = true;
       try {
         await c.persist();
       } catch (_) {
         c.hideUpdatePrompt = false;
       }
+    }
+    if (result?.install == true && mounted) {
+      await installReleaseUpdate(context, c, update);
     }
   }
 
@@ -347,14 +344,24 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       ),
       body: SafeArea(
         top: false,
-        child: IndexedStack(
-          index: c.selectedTab,
+        child: Stack(
           children: [
-            SearchScreen(controller: c, weread: widget.weread),
-            HistoryScreen(controller: c),
-            _wereadVisited
-                ? WereadScreen(controller: widget.weread)
-                : const SizedBox.shrink(),
+            IndexedStack(
+              index: c.selectedTab,
+              children: [
+                SearchScreen(controller: c, weread: widget.weread),
+                HistoryScreen(controller: c),
+                _wereadVisited
+                    ? WereadScreen(controller: widget.weread)
+                    : const SizedBox.shrink(),
+              ],
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _UpdateDownloadBar(c: c),
+            ),
           ],
         ),
       ),
@@ -394,6 +401,66 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 底部更新下载进度条：显示进度，可暂停 / 继续 / 取消，不阻塞界面。
+class _UpdateDownloadBar extends StatelessWidget {
+  final ReaderController c;
+  const _UpdateDownloadBar({required this.c});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return AnimatedBuilder(
+      animation: c,
+      builder: (context, _) {
+        if (!c.updateDownloading) return const SizedBox.shrink();
+        return Material(
+          elevation: 10,
+          color: colors.surfaceContainerHighest,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 4, 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        c.updatePaused
+                            ? '更新已暂停'
+                            : '正在下载更新… ${(c.updateProgress * 100).toStringAsFixed(0)}%',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      const SizedBox(height: 4),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                          value: c.updateProgress,
+                          minHeight: 5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: c.updatePaused ? '继续下载' : '暂停下载',
+                  icon: Icon(c.updatePaused ? Icons.play_arrow : Icons.pause),
+                  onPressed: c.updatePaused ? c.resumeUpdate : c.pauseUpdate,
+                ),
+                IconButton(
+                  tooltip: '取消下载',
+                  icon: const Icon(Icons.close),
+                  onPressed: c.cancelUpdate,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

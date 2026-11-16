@@ -3079,6 +3079,7 @@ class _ReleasesPageState extends State<ReleasesPage> {
   bool _showActions = false;
   String _query = '';
   int _matchIndex = 0;
+  List<String> _abis = const [];
   final Map<String, GlobalKey> _cardKeys = {};
 
   @override
@@ -3090,6 +3091,10 @@ class _ReleasesPageState extends State<ReleasesPage> {
         widget.controller.loadReleases();
       });
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final abis = await widget.controller.native.supportedAbis();
+      if (mounted) setState(() => _abis = abis);
+    });
   }
 
   @override
@@ -3205,55 +3210,113 @@ class _ReleasesPageState extends State<ReleasesPage> {
   }
 
   /// 固定在顶部的下载入口：所有版本共用这一组按钮。
-  Widget _downloadCard(ThemeData theme, ReaderController c) => Card(
-    color: theme.colorScheme.primaryContainer.withValues(alpha: .35),
-    margin: const EdgeInsets.only(bottom: 12),
-    child: Padding(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '下载全部版本',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
+  Widget _downloadCard(ThemeData theme, ReaderController c) {
+    final update = c.latestUpdate();
+    final abi = update?.abiFor(_abis);
+    return Card(
+      color: theme.colorScheme.primaryContainer.withValues(alpha: .35),
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (update != null) ...[
+              Text(
+                '发现新版本 v${update.version}',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _summary(update.body),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: () =>
-                      guarded(context, () => c.native.openUrl(netdiskUrl)),
-                  icon: const Icon(Icons.cloud_download_outlined, size: 18),
-                  label: const Text('网盘下载'),
+                  onPressed: () => installReleaseUpdate(context, c, update),
+                  icon: const Icon(Icons.system_update_alt, size: 18),
+                  label: const Text('立即安装'),
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => guarded(
-                    context,
-                    () => c.native.openUrl(giteeReleasesPage),
-                  ),
-                  icon: const Icon(Icons.code, size: 18),
-                  label: const Text('Gitee 下载'),
+              const SizedBox(height: 6),
+              Text(
+                abi == null ? '该版本没有适配你手机的安装包，请用下面的方式手动安装' : '适配你的手机：$abi',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: abi == null
+                      ? theme.colorScheme.error
+                      : theme.colorScheme.onSurfaceVariant,
                 ),
               ),
+              const SizedBox(height: 10),
+              Text(
+                '备用下载',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 6),
+            ] else ...[
+              Text(
+                '当前已是最新版本 v${c.version}',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 10),
             ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '网盘密码：$netdiskPassword',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () =>
+                        guarded(context, () => c.native.openUrl(netdiskUrl)),
+                    icon: const Icon(Icons.cloud_download_outlined, size: 16),
+                    label: const Text('网盘'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => guarded(
+                      context,
+                      () => c.native.openUrl(giteeReleasesPage),
+                    ),
+                    icon: const Icon(Icons.code, size: 16),
+                    label: const Text('Gitee'),
+                  ),
+                ),
+              ],
             ),
-          ),
-        ],
+            const SizedBox(height: 6),
+            Text(
+              '网盘密码：$netdiskPassword',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
+
+  String _summary(String body) {
+    final lines = releaseNotes(body)
+        .split('\n')
+        .where((line) => line.trim().isNotEmpty)
+        .toList();
+    if (lines.isEmpty) return '';
+    return lines.take(3).join('\n');
+  }
 
   Widget _releaseCard(
     ThemeData theme,
@@ -3262,7 +3325,7 @@ class _ReleasesPageState extends State<ReleasesPage> {
     bool current = false,
   }) {
     final isCurrent = release.version == c.version;
-    final text = markdownToPlain(release.body);
+    final text = releaseNotes(release.body);
     final date = _date(release.publishedAt);
     return Card(
       key: _cardKeys.putIfAbsent(release.tag, () => GlobalKey()),
@@ -3506,10 +3569,51 @@ class _ReleasesPageState extends State<ReleasesPage> {
   }
 }
 
+/// 应用内更新：下载适配当前手机的 APK，再调起系统安装。
+/// 返回 true 表示已调起安装界面。
+Future<bool> installReleaseUpdate(
+  BuildContext context,
+  ReaderController c,
+  AppRelease release,
+) async {
+  final abis = await c.native.supportedAbis();
+  final url = release.apkFor(abis);
+  if (url == null) {
+    if (context.mounted) {
+      await showDialog<void>(
+        context: context,
+        builder: (d) => AlertDialog(
+          title: const Text('没有适配的安装包'),
+          content: Text(
+            '这个版本没有适配你手机（${abis.join(' / ')}）的安装包，'
+            '请用「网盘下载」或「Gitee 下载」手动安装。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(d),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+    }
+    return false;
+  }
+  if (c.updateDownloading) return false;
+  // 后台下载：进度条显示在底部，不阻塞界面。
+  await c.startUpdateDownload(url);
+  return true;
+}
+
 /// 新版本更新弹窗，带两个下载入口和「以后不再弹出」勾选。
 class UpdatePrompt extends StatefulWidget {
   final AppRelease release;
-  const UpdatePrompt({super.key, required this.release});
+  final ReaderController controller;
+  const UpdatePrompt({
+    super.key,
+    required this.release,
+    required this.controller,
+  });
 
   @override
   State<UpdatePrompt> createState() => _UpdatePromptState();
@@ -3518,15 +3622,19 @@ class UpdatePrompt extends StatefulWidget {
 class _UpdatePromptState extends State<UpdatePrompt> {
   bool hide = false;
 
+  void _close({bool install = false}) {
+    Navigator.pop(context, (hide: hide, install: install));
+  }
+
   void _open(String url) {
     final shouldHide = hide;
-    Navigator.pop(context, shouldHide);
+    Navigator.pop(context, (hide: shouldHide, install: false));
     unawaited(NativeBridge().openUrl(url));
   }
 
   @override
   Widget build(BuildContext context) {
-    final text = markdownToPlain(widget.release.body);
+    final text = releaseNotes(widget.release.body);
     final theme = Theme.of(context);
     return AlertDialog(
       title: Text('发现新版本 ${widget.release.version}'),
@@ -3535,23 +3643,24 @@ class _UpdatePromptState extends State<UpdatePrompt> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (text.isNotEmpty) Text(text),
-            const SizedBox(height: 16),
+            if (text.isNotEmpty)
+              Text(text, maxLines: 8, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
-                  child: FilledButton.icon(
+                  child: OutlinedButton.icon(
                     onPressed: () => _open(netdiskUrl),
-                    icon: const Icon(Icons.cloud_download_outlined, size: 18),
-                    label: const Text('网盘下载'),
+                    icon: const Icon(Icons.cloud_download_outlined, size: 16),
+                    label: const Text('网盘'),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: () => _open(widget.release.giteeUrl),
-                    icon: const Icon(Icons.code, size: 18),
-                    label: const Text('Gitee 下载'),
+                    icon: const Icon(Icons.code, size: 16),
+                    label: const Text('Gitee'),
                   ),
                 ),
               ],
@@ -3575,9 +3684,11 @@ class _UpdatePromptState extends State<UpdatePrompt> {
         ),
       ),
       actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, hide),
-          child: const Text('以后再说'),
+        TextButton(onPressed: () => _close(), child: const Text('以后再说')),
+        FilledButton.icon(
+          onPressed: () => _close(install: true),
+          icon: const Icon(Icons.system_update_alt, size: 18),
+          label: const Text('立即安装'),
         ),
       ],
     );

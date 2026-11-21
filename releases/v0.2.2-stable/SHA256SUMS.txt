@@ -1,0 +1,3 @@
+0599eef072d16dece9086f5eaca0690ac2fd80b1fe2e3b08c2ca932dc9a97965  xlib-android-v0.2.2-arm64-v8a.apk
+013548c35ed031533f04dc8e1ea0447ddb0f686c68aa124345067ba0b73f19cd  xlib-android-v0.2.2-armeabi-v7a.apk
+2ff1d7b40a4f47c4164b41f4a747d9df639c4b15441d7954b232a9ecff1b12b9  xlib-android-v0.2.2-x86_64.apk

@@ -1,16 +1,16 @@
 import 'dart:convert';
 import 'dart:io';
 
-/// Gitee 仓库信息（仓库已公开，可匿名访问）。
-const giteeRepo = 'Gjbone/zlib-android';
-const giteeReleasesUrl = 'https://gitee.com/api/v5/repos/$giteeRepo/releases';
-const giteeReleasesPage = 'https://gitee.com/$giteeRepo/releases';
+/// GitHub 仓库信息（仓库已公开，可匿名访问）。
+const releaseRepo = 'KingPenguinMan/xlib-android';
+const releasesApiUrl = 'https://api.github.com/repos/$releaseRepo/releases';
+const releasesPageUrl = 'https://github.com/$releaseRepo/releases';
 
 /// 蓝奏云网盘下载入口（固定地址 + 密码）。
 const netdiskUrl = 'https://wward.lanzouw.com/b01i60kfsf';
 const netdiskPassword = 'zlib';
 
-/// 一个应用版本，对应 Gitee 上的一个 release（发行版）。
+/// 一个应用版本，对应 GitHub 上的一个 release（发行版）。
 class AppRelease {
   final String version; // 去掉 v 前缀，如 0.1.2
   final String tag; // 原始 tag，如 v0.1.2
@@ -48,7 +48,7 @@ class AppRelease {
       tag: tag,
       name: '${json['name'] ?? ''}',
       body: '${json['body'] ?? ''}',
-      publishedAt: '${json['created_at'] ?? ''}',
+      publishedAt: '${json['published_at'] ?? json['created_at'] ?? ''}',
       prerelease: json['prerelease'] == true,
       draft: json['draft'] == true,
       apks: apks,
@@ -72,9 +72,9 @@ class AppRelease {
     return null;
   }
 
-  /// Gitee releases 页面上精准跳到这个版本的锚点链接。
+  /// GitHub releases 页面上精准跳到这个版本的锚点链接。
   /// 每次发新版 tag 会变，链接也会跟着变（#release-v{tag}）。
-  String get giteeUrl => '$giteeReleasesPage#release-$tag';
+  String get releaseUrl => '$releasesPageUrl/tag/$tag';
 }
 
 /// 三段式版本号比较：candidate 是否严格比 installed 新。
@@ -90,12 +90,12 @@ bool isNewerVersion(String candidate, String installed) {
   return false;
 }
 
-/// 拉取 Gitee 上全部 release，最新在前。
+/// 拉取 GitHub 上全部 release，最新在前。
 Future<List<AppRelease>> fetchReleases() async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
   try {
     final req = await client.getUrl(
-      Uri.parse('$giteeReleasesUrl?per_page=100&direction=desc'),
+      Uri.parse('$releasesApiUrl?per_page=100'),
     );
     req.headers.set(HttpHeaders.userAgentHeader, 'xlib-android');
     final response = await req.close();
@@ -105,7 +105,7 @@ Future<List<AppRelease>> fetchReleases() async {
     return decoded
         .whereType<Map>()
         .map((e) => AppRelease.fromJson(Map<String, dynamic>.from(e)))
-        .where((r) => r.tag.isNotEmpty)
+        .where((r) => RegExp(r'^v\d+\.\d+\.\d+$').hasMatch(r.tag) && !r.draft && !r.prerelease)
         .toList();
   } catch (_) {
     return const [];

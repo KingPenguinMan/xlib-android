@@ -391,7 +391,7 @@ class ReaderController extends ChangeNotifier {
 
   bool bookmarked(Book book) => bookmarks.any((b) => b.ref == book.ref);
 
-  /// 拉取 Gitee 上的版本历史（供「版本历史」页和更新检查用）。
+  /// 拉取 GitHub 上的版本历史（供「版本历史」页和更新检查用）。
   Future<void> loadReleases() async {
     if (releasesLoading) return;
     releasesLoading = true;

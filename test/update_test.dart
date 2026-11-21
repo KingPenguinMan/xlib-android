@@ -12,18 +12,24 @@ void main() {
     expect(isNewerVersion('abc', '0.1.2'), isFalse);
   });
 
-  test('AppRelease.fromJson 解析版本号与 Gitee 锚点链接', () {
+  test('AppRelease.fromJson 解析版本号与 GitHub 锚点链接', () {
     final release = AppRelease.fromJson({
       'tag_name': 'v0.1.2',
-      'name': 'z-lib Android 0.1.2 稳定版',
+      'name': 'xlib Android 0.1.2 稳定版',
       'body': '# 标题\n- 改动一\n- 改动二',
       'created_at': '2026-11-11T06:56:57+08:00',
+      'published_at': '2026-11-21T12:00:00Z',
+      'assets': [{'name': 'xlib-android-v0.1.2-arm64-v8a.apk', 'browser_download_url': 'https://github.com/KingPenguinMan/xlib-android/releases/download/v0.1.2/xlib-android-v0.1.2-arm64-v8a.apk'}],
     });
     expect(release.version, '0.1.2');
     expect(release.tag, 'v0.1.2');
+    expect(release.publishedAt, '2026-11-21T12:00:00Z');
+    expect(release.abiFor(['armeabi-v7a', 'arm64-v8a']), 'arm64-v8a');
+    expect(release.apkFor(['arm64-v8a']), contains('/releases/download/v0.1.2/'));
+    expect(release.apkFor(['x86_64']), isNull);
     expect(
-      release.giteeUrl,
-      'https://gitee.com/Gjbone/zlib-android/releases#release-v0.1.2',
+      release.releaseUrl,
+      'https://github.com/KingPenguinMan/xlib-android/releases/tag/v0.1.2',
     );
   });
 

@@ -3065,7 +3065,7 @@ class _SectionManagerSheetState extends State<SectionManagerSheet> {
   }
 }
 
-/// 版本历史页：列出 Gitee 上的发行版，含版本号、时间、更新说明、下载入口。
+/// 版本历史页：列出 GitHub 上的发行版，含版本号、时间、更新说明、下载入口。
 class ReleasesPage extends StatefulWidget {
   final ReaderController controller;
   const ReleasesPage({super.key, required this.controller});
@@ -3288,10 +3288,10 @@ class _ReleasesPageState extends State<ReleasesPage> {
                   child: OutlinedButton.icon(
                     onPressed: () => guarded(
                       context,
-                      () => c.native.openUrl(giteeReleasesPage),
+                      () => c.native.openUrl(releasesPageUrl),
                     ),
                     icon: const Icon(Icons.code, size: 16),
-                    label: const Text('Gitee'),
+                    label: const Text('GitHub'),
                   ),
                 ),
               ],
@@ -3586,7 +3586,7 @@ Future<bool> installReleaseUpdate(
           title: const Text('没有适配的安装包'),
           content: Text(
             '这个版本没有适配你手机（${abis.join(' / ')}）的安装包，'
-            '请用「网盘下载」或「Gitee 下载」手动安装。',
+            '请用「网盘下载」或「GitHub 下载」手动安装。',
           ),
           actions: [
             TextButton(
@@ -3657,9 +3657,9 @@ class _UpdatePromptState extends State<UpdatePrompt> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () => _open(widget.release.giteeUrl),
+                    onPressed: () => _open(widget.release.releaseUrl),
                     icon: const Icon(Icons.code, size: 16),
-                    label: const Text('Gitee'),
+                    label: const Text('GitHub'),
                   ),
                 ),
               ],

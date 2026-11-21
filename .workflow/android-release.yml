@@ -1,0 +1,30 @@
+version: '1.0'
+name: android-release
+displayName: Android 标签发行
+triggers:
+  push:
+    branches:
+      include:
+        - '^$'
+    tags:
+      include:
+        - '^v[0-9]+\.[0-9]+\.[0-9]+$'
+stages:
+  - name: publish
+    displayName: 构建、签名并上传
+    steps:
+      - step: shell@agent
+        name: signed_release
+        displayName: 在签名主机运行
+        hostGroupID: android-release
+        script: |
+          set -eu
+          scratch=$(mktemp -d)
+          trap 'rm -rf "$scratch"' EXIT
+          git clone --quiet --branch joaquinker --single-branch https://gitee.com/Gjbone/zlib-android.git "$scratch/repo"
+          cd "$scratch/repo"
+          git fetch --quiet --tags origin
+          commit=$(git rev-parse --verify "${GITEE_COMMIT}^{commit}")
+          git merge-base --is-ancestor "$commit" origin/joaquinker
+          git checkout --quiet --detach "$commit"
+          python3 ci/android-release.py publish

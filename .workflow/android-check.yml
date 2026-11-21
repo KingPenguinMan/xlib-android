@@ -1,0 +1,18 @@
+version: '1.0'
+name: android-check
+displayName: Android 分支测试
+triggers:
+  push:
+    branches:
+      precise:
+        - joaquinker
+stages:
+  - name: check
+    displayName: Flutter 测试
+    steps:
+      - step: build@gcc
+        name: tests
+        displayName: 在云端运行 Flutter 测试
+        gccVersion: '9.4.0'
+        commands:
+          - bash ci/flutter-check.sh

@@ -16,7 +16,7 @@ class BrandMark extends StatelessWidget {
       color: Colors.white,
       borderRadius: BorderRadius.circular(size * .3),
     ),
-    child: Image.asset('assets/zlib_logo.png', fit: BoxFit.contain),
+    child: const Center(child: Text('x', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: Color(0xFF35542B)))),
   );
 }
 
@@ -89,7 +89,7 @@ class BookCover extends StatelessWidget {
         Image.network(
           url,
           fit: BoxFit.cover,
-          headers: const {'User-Agent': 'Mozilla/5.0 z-lib-android'},
+          headers: const {'User-Agent': 'Mozilla/5.0 xlib-android'},
           errorBuilder: (_, e, s) =>
               allowFallback && fallbackCover.isNotEmpty && url != fallbackCover
               ? remoteCover(fallbackCover, allowFallback: false)
@@ -101,7 +101,7 @@ class BookCover extends StatelessWidget {
       width: width,
       height: height,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(4),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: .08),
@@ -111,7 +111,7 @@ class BookCover extends StatelessWidget {
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(4),
         child: book.cover.isNotEmpty
             ? remoteCover(book.cover)
             : fallbackCover.isNotEmpty
@@ -138,16 +138,8 @@ class BookTile extends StatelessWidget {
   String _downloadTimeLabel() {
     final raw = book.downloadedAt.trim();
     if (raw.isEmpty) return '下载时间未知';
-    final numeric = int.tryParse(raw);
-    final parsed = numeric == null
-        ? DateTime.tryParse(
-            raw.replaceAll('/', '-').replaceFirst(RegExp(r'\s+'), 'T'),
-          )
-        : DateTime.fromMillisecondsSinceEpoch(
-            numeric < 100000000000 ? numeric * 1000 : numeric,
-          );
-    if (parsed == null) return raw;
-    final time = parsed.toLocal();
+    final time = book.localDownloadTime;
+    if (time == null) return raw;
     String two(int value) => value.toString().padLeft(2, '0');
     return '${time.year}-${two(time.month)}-${two(time.day)} '
         '${two(time.hour)}:${two(time.minute)}';
@@ -310,8 +302,7 @@ Future<void> guarded(
 Future<bool> showLogin(
   BuildContext context,
   ReaderController controller,
-) async =>
-    await showModalBottomSheet<bool>(
+) async =>    await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -371,7 +362,7 @@ class _LoginSheetState extends State<LoginSheet> {
             const BrandMark(),
             const SizedBox(height: 18),
             Text(
-              '欢迎来到 z-lib',
+              '欢迎来到 xlib',
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 6),
@@ -586,7 +577,7 @@ Future<void> showRoutes(BuildContext context, ReaderController c) =>
                                 color: color,
                               ),
                         title: Text(
-                          r.host,
+                          r.usable ? Uri.parse(r.effectiveOrigin).host : r.host,
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                         subtitle: Text(
@@ -622,3 +613,62 @@ Future<void> showRoutes(BuildContext context, ReaderController c) =>
         ),
       ),
     );
+
+/// 列表下滑后浮现的「搜索 + 回到顶部」按钮组。
+///
+/// 页面滑到深处时，顶部入口和搜索入口都够不着，这两个按钮负责把它们拉回来。
+/// [tag] 用来区分不同页面的 heroTag，避免同一屏出现两个 FAB 时冲突。
+class ScrollQuickActions extends StatelessWidget {
+  final bool visible;
+  final String tag;
+  final VoidCallback onTop;
+  final VoidCallback? onSearch;
+  const ScrollQuickActions({
+    super.key,
+    required this.visible,
+    required this.tag,
+    required this.onTop,
+    this.onSearch,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return AnimatedSlide(
+      offset: visible ? Offset.zero : const Offset(0, .35),
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 180),
+        child: IgnorePointer(
+          ignoring: !visible,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (onSearch != null) ...[
+                FloatingActionButton.small(
+                  heroTag: '$tag-search',
+                  tooltip: '搜索',
+                  onPressed: onSearch,
+                  backgroundColor: colors.primaryContainer,
+                  foregroundColor: colors.onPrimaryContainer,
+                  child: const Icon(Icons.search, size: 20),
+                ),
+                const SizedBox(height: 10),
+              ],
+              FloatingActionButton.small(
+                heroTag: '$tag-top',
+                tooltip: '回到顶部',
+                onPressed: onTop,
+                backgroundColor: colors.surfaceContainerHighest,
+                foregroundColor: colors.onSurfaceVariant,
+                child: const Icon(Icons.arrow_upward, size: 20),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

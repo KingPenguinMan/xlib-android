@@ -1,5 +1,5 @@
-name: bookisle
-description: "A new Flutter project."
+name: xlib
+description: "xlib Android reading client."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.1.0+1
+version: 0.2.1+7002
 
 environment:
   sdk: ^3.13.5
@@ -35,6 +35,9 @@ dependencies:
 
   crypto: ^3.0.6
   html: ^0.15.6
+
+  # 微信读书扫码连接需要在本机渲染二维码，纯 Dart 实现，无原生依赖。
+  qr_flutter: ^4.1.0
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -58,7 +61,7 @@ dev_dependencies:
 flutter:
 
   assets:
-    - assets/zlib_logo.png
+    - assets/reading_desk.jpg
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

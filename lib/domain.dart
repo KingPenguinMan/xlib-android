@@ -1,6 +1,8 @@
 import 'package:html/parser.dart' as html;
 
 const knownHosts = <String>[
+  'z-lib.by',
+  'z-library.sk',
   'z-lib.gd',
   'z-lib.gl',
   'z-library.ec',
@@ -17,7 +19,13 @@ bool trustedOrigin(Uri uri) =>
     uri.scheme == 'https' &&
     uri.userInfo.isEmpty &&
     (uri.port == 0 || uri.port == 443) &&
-    knownHosts.any((host) => uri.host == host || uri.host.endsWith('.$host'));
+    (knownHosts.contains(uri.host) ||
+        knownHosts.any(
+          (host) =>
+              host != 'z-lib.by' &&
+              host != 'z-library.sk' &&
+              uri.host.endsWith('.$host'),
+        ));
 
 String textValue(dynamic value) => value == null ? '' : '$value';
 int intValue(dynamic value, [int fallback = 0]) =>
@@ -57,6 +65,19 @@ class Book {
       description,
       date,
       downloadedAt;
+  DateTime? get localDownloadTime {
+    final raw = downloadedAt.trim();
+    final timestamp = int.tryParse(raw);
+    if (timestamp == null)
+      return DateTime.tryParse(
+        raw.replaceAll('/', '-').replaceFirst(RegExp(r'\s+'), 'T'),
+      )?.toLocal();
+    final millis = timestamp < 100000000000 ? timestamp * 1000 : timestamp;
+    return millis.abs() > 8640000000000000
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(millis);
+  }
+
   const Book({
     required this.id,
     required this.hash,
@@ -143,8 +164,14 @@ class Book {
   };
 }
 
-class BookPage {
-  final List<Book> books;
+/// 线路官方分类树里的一个节点。
+class ZlibCategory {
+  final int id;
+  final String name;
+  const ZlibCategory(this.id, this.name);
+}
+
+class BookPage {  final List<Book> books;
   final int page, totalPages;
   const BookPage(this.books, this.page, this.totalPages);
   factory BookPage.fromJson(Map<String, dynamic> j, int requested) {

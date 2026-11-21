@@ -7,26 +7,42 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'controller.dart';
 import 'widgets.dart';
 import 'screens.dart';
+import 'reading_invite.dart';
+import 'weread/weread_controller.dart';
+import 'weread/weread_screens.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(ReaderApp(controller: ReaderController()));
+  runApp(ReaderApp(controller: ReaderController(), weread: WereadController()));
 }
 
 ThemeData readerTheme(Brightness brightness) {
   final dark = brightness == Brightness.dark;
   final scheme = ColorScheme.fromSeed(
-    seedColor: const Color(0xff286b5b),
+    seedColor: const Color(0xff435534),
     brightness: brightness,
-    surface: dark ? const Color(0xff111b18) : const Color(0xfff7f7f2),
+    surface: dark ? const Color(0xff1e221b) : const Color(0xfffaf6ec),
   );
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
     brightness: brightness,
     scaffoldBackgroundColor: scheme.surface,
+    navigationBarTheme: const NavigationBarThemeData(
+      iconTheme: WidgetStatePropertyAll(IconThemeData(size: 19)),
+      labelTextStyle: WidgetStatePropertyAll(
+        TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+      ),
+    ),
+    drawerTheme: DrawerThemeData(
+      backgroundColor: scheme.surface,
+      shape: const RoundedRectangleBorder(),
+    ),
     appBarTheme: AppBarTheme(
       backgroundColor: scheme.surface,
+      shape: Border(
+        bottom: BorderSide(color: scheme.outlineVariant, width: .6),
+      ),
       surfaceTintColor: Colors.transparent,
       systemOverlayStyle: dark
           ? SystemUiOverlayStyle.light
@@ -36,10 +52,10 @@ ThemeData readerTheme(Brightness brightness) {
       filled: true,
       fillColor: scheme.surfaceContainerHighest.withValues(alpha: .48),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(8),
         borderSide: BorderSide.none,
       ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 17),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
@@ -56,8 +72,8 @@ ThemeData readerTheme(Brightness brightness) {
     cardTheme: CardThemeData(
       elevation: 0,
       margin: EdgeInsets.zero,
-      color: dark ? const Color(0xff1b2823) : Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      color: dark ? const Color(0xff272d23) : const Color(0xfff6f1e6),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     ),
     bottomSheetTheme: BottomSheetThemeData(
       backgroundColor: scheme.surface,
@@ -69,19 +85,26 @@ ThemeData readerTheme(Brightness brightness) {
     ),
     textTheme: const TextTheme(
       headlineLarge: TextStyle(
-        fontSize: 28,
+        fontFamily: 'serif',
+        fontSize: 22,
         fontWeight: FontWeight.w800,
         height: 1.35,
         letterSpacing: -.8,
       ),
       headlineSmall: TextStyle(
-        fontSize: 24,
+        fontFamily: 'serif',
+        fontSize: 20,
         fontWeight: FontWeight.w700,
         height: 1.35,
       ),
-      titleLarge: TextStyle(fontSize: 21, fontWeight: FontWeight.w700),
+      titleLarge: TextStyle(
+        fontFamily: 'serif',
+        fontSize: 17,
+        fontWeight: FontWeight.w700,
+      ),
       titleMedium: TextStyle(
-        fontSize: 16,
+        fontFamily: 'serif',
+        fontSize: 15,
         fontWeight: FontWeight.w600,
         height: 1.5,
       ),
@@ -93,8 +116,14 @@ ThemeData readerTheme(Brightness brightness) {
 
 class ReaderApp extends StatefulWidget {
   final ReaderController controller;
+  final WereadController weread;
   final bool autoStart;
-  const ReaderApp({super.key, required this.controller, this.autoStart = true});
+  const ReaderApp({
+    super.key,
+    required this.controller,
+    required this.weread,
+    this.autoStart = true,
+  });
   @override
   State<ReaderApp> createState() => _ReaderAppState();
 }
@@ -110,7 +139,7 @@ class _ReaderAppState extends State<ReaderApp> {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.controller,
     builder: (context, _) => MaterialApp(
-      title: 'z-lib',
+      title: 'xlib',
       debugShowCheckedModeBanner: false,
       locale: const Locale('zh', 'CN'),
       supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
@@ -118,19 +147,91 @@ class _ReaderAppState extends State<ReaderApp> {
       theme: readerTheme(Brightness.light),
       darkTheme: readerTheme(Brightness.dark),
       themeMode: widget.controller.theme,
-      home: AppShell(controller: widget.controller),
+      home: AppShell(controller: widget.controller, weread: widget.weread),
+      builder: (context, child) => Stack(
+        children: [
+          if (child != null) child,
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 56,
+            child: _GlobalUpdateBar(c: widget.controller),
+          ),
+        ],
+      ),
     ),
   );
 }
 
 class AppShell extends StatefulWidget {
   final ReaderController controller;
-  const AppShell({super.key, required this.controller});
+  final WereadController weread;
+  const AppShell({super.key, required this.controller, required this.weread});
   @override
   State<AppShell> createState() => _AppShellState();
 }
 
 class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
+  bool _promptsStarted = false;
+
+  /// IndexedStack 会预构建所有子页，微信读书页改为首次访问后再创建，
+  /// 免得每次启动都去读密钥库和微信接口。
+  bool _wereadVisited = false;
+  Future<void> _startupPrompts() async {
+    if (!mounted) return;
+    if (!c.hideGroupInvite) {
+      final choice = await showDialog<InviteChoice>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const ReadingInvite(),
+      );
+      if (choice?.hide == true) {
+        c.hideGroupInvite = true;
+        try {
+          await c.persist();
+          if (mounted) c.say('以后可以从侧边栏「一起读书」加入群聊');
+        } catch (_) {
+          c.hideGroupInvite = false;
+          if (mounted) c.say('未能保存邀请偏好，请稍后重试');
+        }
+      }
+      if (choice?.join == true) await _open(kReadingClubUrl);
+    }
+    await _maybePromptUpdate();
+  }
+
+  /// 检查 Gitee 上有没有新版本，有则弹更新提醒（可勾选以后不再弹出）。
+  Future<void> _maybePromptUpdate() async {
+    if (c.hideUpdatePrompt) return;
+    await c.loadReleases();
+    if (!mounted) return;
+    final update = c.latestUpdate();
+    if (update == null) return;
+    final result = await showDialog<({bool hide, bool install})>(
+      context: context,
+      builder: (_) => UpdatePrompt(release: update, controller: c),
+    );
+    if (result?.hide == true) {
+      c.hideUpdatePrompt = true;
+      try {
+        await c.persist();
+      } catch (_) {
+        c.hideUpdatePrompt = false;
+      }
+    }
+    if (result?.install == true && mounted) {
+      await installReleaseUpdate(context, c, update);
+    }
+  }
+
+  Future<void> _open(String url) async {
+    try {
+      await c.native.openUrl(url);
+    } catch (_) {
+      c.say('无法打开链接，请检查设备是否已安装浏览器');
+    }
+  }
+
   int _noticeId = 0;
   ReaderController get c => widget.controller;
   @override
@@ -141,7 +242,16 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   }
 
   void _notice() {
-    if (!mounted || c.noticeId == _noticeId) return;
+    if (!mounted) return;
+    // 搜索页里点「去连接」也会切到这个 tab，同样要按需构建。
+    if (c.selectedTab == 2 && !_wereadVisited) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_wereadVisited) {
+          setState(() => _wereadVisited = true);
+        }
+      });
+    }
+    if (c.noticeId == _noticeId) return;
     _noticeId = c.noticeId;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted)
@@ -162,6 +272,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     c.removeListener(_notice);
+    widget.weread.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -177,26 +288,43 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
             children: [
               BrandMark(size: 64),
               SizedBox(height: 24),
-              Text('z-lib · 把好书带在身边'),
+              Text('xlib · 把好书带在身边'),
               SizedBox(height: 24),
               CircularProgressIndicator(),
             ],
           ),
         ),
       );
+    if (!_promptsStarted) {
+      _promptsStarted = true;
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => unawaited(_startupPrompts()),
+      );
+    }
     return Scaffold(
       appBar: AppBar(
-        toolbarHeight: 54,
-        titleSpacing: 14,
+        toolbarHeight: 48,
+        titleSpacing: 0,
         title: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            BrandMark(size: 26),
-            SizedBox(width: 8),
-            Text('z-lib', style: TextStyle(fontWeight: FontWeight.w800)),
+            Text(
+              'xlib',
+              style: TextStyle(
+                fontSize: 22,
+                fontFamily: 'serif',
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ],
         ),
         actions: [
+          if (c.selectedTab == 1 && c.loggedIn)
+            IconButton(
+              tooltip: '刷新历史',
+              icon: const Icon(Icons.refresh),
+              onPressed: c.historyLoading ? null : c.loadHistory,
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: TextButton.icon(
@@ -230,8 +358,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         child: IndexedStack(
           index: c.selectedTab,
           children: [
-            SearchScreen(controller: c),
+            SearchScreen(controller: c, weread: widget.weread),
             HistoryScreen(controller: c),
+            _wereadVisited
+                ? WereadScreen(controller: widget.weread)
+                : const SizedBox.shrink(),
           ],
         ),
       ),
@@ -242,23 +373,96 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         child: SafeArea(child: ProfileScreen(controller: c)),
       ),
       bottomNavigationBar: NavigationBar(
-        height: 62,
+        height: 52,
+        backgroundColor: colors.surface,
+        indicatorColor: colors.primary.withValues(alpha: .10),
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         selectedIndex: c.selectedTab,
-        onDestinationSelected: c.setTab,
+        onDestinationSelected: (index) {
+          if (index == 2 && !_wereadVisited) {
+            setState(() => _wereadVisited = true);
+          }
+          c.setTab(index);
+        },
         destinations: [
           const NavigationDestination(
-            icon: Icon(Icons.search_rounded),
-            selectedIcon: Icon(Icons.travel_explore_rounded),
-            label: '找书',
+            icon: Icon(Icons.menu_book_outlined),
+            selectedIcon: Icon(Icons.menu_book_rounded),
+            label: '首页',
           ),
           const NavigationDestination(
             icon: Icon(Icons.history_outlined),
             selectedIcon: Icon(Icons.history_rounded),
             label: '历史',
           ),
+          const NavigationDestination(
+            icon: Icon(Icons.auto_stories_outlined),
+            selectedIcon: Icon(Icons.auto_stories_rounded),
+            label: '微信读书',
+          ),
         ],
       ),
+    );
+  }
+}
+
+/// 全局更新下载进度条：悬浮卡片，所有页面（含详情、搜索、历史版本等）都能看到。
+class _GlobalUpdateBar extends StatelessWidget {
+  final ReaderController c;
+  const _GlobalUpdateBar({required this.c});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return AnimatedBuilder(
+      animation: c,
+      builder: (context, _) {
+        if (!c.updateDownloading) return const SizedBox.shrink();
+        return Material(
+          elevation: 8,
+          color: colors.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 4, 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        c.updatePaused
+                            ? '更新已暂停'
+                            : '正在下载更新… ${(c.updateProgress * 100).toStringAsFixed(0)}%',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      const SizedBox(height: 4),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                          value: c.updateProgress,
+                          minHeight: 5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: c.updatePaused ? '继续下载' : '暂停下载',
+                  icon: Icon(c.updatePaused ? Icons.play_arrow : Icons.pause),
+                  onPressed: c.updatePaused ? c.resumeUpdate : c.pauseUpdate,
+                ),
+                IconButton(
+                  tooltip: '取消下载',
+                  icon: const Icon(Icons.close),
+                  onPressed: c.cancelUpdate,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import 'api.dart';
 import 'controller.dart';
 import 'domain.dart';
 import 'native.dart';
@@ -42,18 +43,53 @@ class _PreviewLoaderState extends State<PreviewLoader> {
       if (!mounted) return;
       var url = Uri.parse(link);
       HttpClientResponse? stream;
+      final originUri = Uri.parse(origin);
+      // 复用主传输层的 cookie 池（含 bsrv 这类防爬 cookie），
+      // 预览以前用独立连接拿不到它们，会被 /dl/ 直接挡成 503。
+      final jar = <String, String>{
+        ...c.api.transport.cookies(originUri.origin),
+      };
+
+      Future<HttpClientResponse> fetch(Uri target) async {
+        final req = await client.getUrl(target);
+        req.followRedirects = false;
+        req.headers.set(HttpHeaders.userAgentHeader, HttpTransport.userAgent);
+        if (target.origin == originUri.origin) {
+          c.api.downloadHeaders(origin, session).forEach(req.headers.set);
+        }
+        final merged = {...jar, ...c.api.transport.cookies(target.origin)};
+        if (merged.isNotEmpty) {
+          req.headers.set(
+            'Cookie',
+            merged.entries.map((e) => '${e.key}=${e.value}').join('; '),
+          );
+        }
+        req.headers.set('Accept-Encoding', 'identity');
+        final res = await req.close().timeout(const Duration(seconds: 20));
+        // 收集响应下发的 cookie，后续重试和跳转都要带上。
+        for (final ck in res.cookies) {
+          if (ck.maxAge == 0) {
+            jar.remove(ck.name);
+          } else {
+            jar[ck.name] = ck.value;
+          }
+        }
+        return res;
+      }
+
       for (var redirect = 0; redirect <= 5; redirect++) {
         if (url.scheme != 'https' ||
             url.userInfo.isNotEmpty ||
             url.host.isEmpty)
           throw const FormatException('阅读地址无效');
-        final req = await client.getUrl(url);
-        req.followRedirects = false;
-        if (url.origin == Uri.parse(origin).origin) {
-          c.api.downloadHeaders(origin, session).forEach(req.headers.set);
+        var res = await fetch(url);
+        // 503 多半是首次访问下 cookie 或瞬时限流：带上新 cookie 再试两次。
+        var retried = 0;
+        while (res.statusCode == 503 && retried++ < 2) {
+          await res.drain<void>().timeout(const Duration(seconds: 10));
+          await Future<void>.delayed(Duration(milliseconds: 500 * retried));
+          res = await fetch(url);
         }
-        req.headers.set('Accept-Encoding', 'identity');
-        final res = await req.close().timeout(const Duration(seconds: 20));
         if (!res.isRedirect) {
           stream = res;
           break;
@@ -63,8 +99,9 @@ class _PreviewLoaderState extends State<PreviewLoader> {
         url = url.resolve(location);
         await res.drain<void>().timeout(const Duration(seconds: 10));
       }
-      if (stream == null || stream.statusCode != 200)
+      if (stream == null || stream.statusCode != 200) {
         throw const FormatException('未能获取完整书籍，请稍后重试');
+      }
       const limit = 128 * 1024 * 1024;
       if (stream.contentLength > limit)
         throw const FormatException('试读支持 128 MB 以内的文件');

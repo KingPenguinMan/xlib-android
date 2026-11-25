@@ -83,6 +83,9 @@ class ReaderController extends ChangeNotifier {
       format = '',
       language = '';
   String searchError = '', historyError = '', profileError = '';
+  String booklistsError = '';
+  bool booklistsLoading = false;
+  bool myBooklistsLoading = false;
   String notice = '';
   int noticeId = 0, _searchGeneration = 0;
   int selectedTab = 0;
@@ -91,12 +94,19 @@ class ReaderController extends ChangeNotifier {
       .toList();
   List<String> recent = [];
   List<Book> bookmarks = [];
+
+  /// 本次会话里主动取消收藏的 id，刷新时不要被云端列表又加回来。
+  final Set<String> _unmarkedIds = <String>{};
   bool bookmarksLoading = false;
   String bookmarksError = '';
   List<DownloadRecord> downloads = [];
   final Map<String, String> _downloadLinkCache = {};
   final Set<String> selectedDownloadIds = {};
   BookPage? searchPage, historyPage;
+  BooklistPage? booklistPage;
+  BooklistPage? myBooklistPage;
+  BooklistPage? favoriteBooklistPage;
+  bool favoriteBooklistsLoading = false;
   List<Book> recommendationBooks = [];
   bool recommendationsLoading = false;
   int recommendationPage = 0, recommendationTotalPages = 1;
@@ -289,7 +299,10 @@ class ReaderController extends ChangeNotifier {
   void setTab(int tab) {
     selectedTab = tab;
     changed();
-    if (tab == 1 && loggedIn && historyPage == null) unawaited(loadHistory());
+    // 0 首页 / 1 书单 / 2 历史 / 3 微信读书
+    if (tab == 1 && loggedIn && booklistPage == null)
+      unawaited(loadBooklists());
+    if (tab == 2 && loggedIn && historyPage == null) unawaited(loadHistory());
   }
 
   Future<void> cancelDownload(String id) async {
@@ -335,11 +348,25 @@ class ReaderController extends ChangeNotifier {
 
   /// 收藏 / 取消收藏。先乐观更新本地，再同步到 zlib 云端收藏，
   /// 这样同一账号在其他设备登录也能看到。云端失败会回滚本地并抛错。
+  Future<List<Book>> authorBooks(String authorProfile) =>
+      read((o, ss) => api.authorBooks(o, ss, authorProfile));
+
+  Future<({int total, List<Map<String, dynamic>> items})> bookComments(
+    Book book,
+  ) => read((o, ss) => api.bookComments(o, ss, book));
+
+  /// 给书籍评分（推荐 +1 / 不推荐 -1）。
+  Future<void> voteBook(Book book, int score) async {
+    await read((o, ss) => api.voteBook(o, ss, book.id, score));
+  }
+
   Future<void> toggleBookmark(Book book) async {
     final wasBookmarked = bookmarked(book);
     if (wasBookmarked) {
-      bookmarks.removeWhere((b) => b.ref == book.ref);
+      bookmarks.removeWhere((b) => b.id == book.id || b.ref == book.ref);
+      _unmarkedIds.add(book.id);
     } else {
+      _unmarkedIds.remove(book.id);
       bookmarks.insert(0, book);
     }
     changed();
@@ -356,7 +383,7 @@ class ReaderController extends ChangeNotifier {
       if (wasBookmarked) {
         bookmarks.insert(0, book);
       } else {
-        bookmarks.removeWhere((b) => b.ref == book.ref);
+        bookmarks.removeWhere((b) => b.id == book.id || b.ref == book.ref);
       }
       changed();
       await persist();
@@ -379,7 +406,21 @@ class ReaderController extends ChangeNotifier {
         if (result.books.isEmpty || result.page >= result.totalPages) break;
         page++;
       }
-      bookmarks = all;
+      // 合并而不是覆盖：把本地「刚收藏、云端还没返回」的书保留下来，
+      // 否则一次刷新就会把用户刚收藏的书刷掉（这是收藏丢失的根因）。
+      // 本地列表在前：刚收藏的书要保持在最上面，否则会被云端那批挤到末尾，
+      // 用户翻不到就会以为「收藏没生效」。
+      final merged = <Book>[];
+      final seenIds = <String>{};
+      for (final b in bookmarks) {
+        if (_unmarkedIds.contains(b.id)) continue;
+        if (seenIds.add(b.id)) merged.add(b);
+      }
+      for (final b in all) {
+        if (_unmarkedIds.contains(b.id)) continue;
+        if (seenIds.add(b.id)) merged.add(b);
+      }
+      bookmarks = merged;
       await persist();
     } catch (e) {
       bookmarksError = '$e';
@@ -389,9 +430,15 @@ class ReaderController extends ChangeNotifier {
     }
   }
 
-  bool bookmarked(Book book) => bookmarks.any((b) => b.ref == book.ref);
+  /// 收藏判断同时认 id 和 id:hash。
+  ///
+  /// 网页来的书和 EAPI 来的书 id 一致但 hash 可能是两套，
+  /// 只用 ref 会比不出来；只用 id 又怕个别情况 id 缺失。
+  /// 两者任一相等就算同一本，这样 EAPI 和 HTML 两条路都稳。
+  bool bookmarked(Book book) =>
+      bookmarks.any((b) => b.id == book.id || b.ref == book.ref);
 
-  /// 拉取 GitHub 上的版本历史（供「版本历史」页和更新检查用）。
+  /// 拉取 Gitee 上的版本历史（供「版本历史」页和更新检查用）。
   Future<void> loadReleases() async {
     if (releasesLoading) return;
     releasesLoading = true;
@@ -446,7 +493,7 @@ class ReaderController extends ChangeNotifier {
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 15);
       final request = await client.getUrl(Uri.parse(url));
-      request.headers.set(HttpHeaders.userAgentHeader, 'xlib-android');
+      request.headers.set(HttpHeaders.userAgentHeader, 'z-lib-android');
       final response = await request.close();
       if (response.statusCode != 200) {
         client.close(force: true);
@@ -1008,6 +1055,122 @@ class ReaderController extends ChangeNotifier {
         sectionLoading.remove(spec.id);
         changed();
       }
+    }
+  }
+
+  /// 加载"我的书单"（需要登录）。
+  Future<void> loadMyBooklists() async {
+    if (myBooklistsLoading || !loggedIn) return;
+    myBooklistsLoading = true;
+    changed();
+    try {
+      myBooklistPage = await read((o, s) => api.myBooklists(o, s));
+    } catch (error) {
+      booklistsError = '$error';
+    } finally {
+      myBooklistsLoading = false;
+      changed();
+    }
+  }
+
+  /// 新建书单（会同步到 zlib 官网账号）。
+  Future<void> createBooklist({
+    required String title,
+    String description = '',
+    bool isPrivate = false,
+  }) async {
+    await read(
+      (o, s) => api.createBooklist(
+        o,
+        s,
+        title: title,
+        description: description,
+        isPrivate: isPrivate,
+      ),
+    );
+    await loadMyBooklists();
+  }
+
+  /// 把书加入已有书单。
+  Future<void> addBookToBooklist(Book book, Booklist list) async {
+    await read((o, s) => api.addBookToBooklist(o, s, book.id, list.id));
+    say('已加入「${list.title}」');
+    await loadMyBooklists();
+  }
+
+  /// 删除书单。
+  Future<void> deleteBooklist(Booklist list) async {
+    await read((o, s) => api.deleteBooklist(o, s, list.id));
+    say('已删除「${list.title}」');
+    await loadMyBooklists();
+    await loadFavoriteBooklists();
+  }
+
+  /// 收藏 / 取消收藏书单。
+  Future<void> toggleFavorite(Booklist list) async {
+    final want = !list.isFavorite;
+    await read((o, s) => api.favoriteBooklist(o, s, list.id, favorite: want));
+    say(want ? '已收藏「${list.title}」' : '已取消收藏「${list.title}」');
+    await loadFavoriteBooklists();
+  }
+
+  /// 加载我收藏的书单（需要登录）。
+  Future<void> loadFavoriteBooklists() async {
+    if (favoriteBooklistsLoading || !loggedIn) return;
+    favoriteBooklistsLoading = true;
+    changed();
+    try {
+      favoriteBooklistPage = await read((o, s) => api.favoriteBooklists(o, s));
+    } catch (_) {
+      favoriteBooklistPage = const BooklistPage([], 1, 1);
+    } finally {
+      favoriteBooklistsLoading = false;
+      changed();
+    }
+  }
+
+  /// 加载某个书单里的书（需要登录）。
+  Future<BookPage> booklistBooks(String href, {int page = 1}) =>
+      read((o, s) => api.booklistBooks(o, s, href, page));
+
+  /// 加载社区书单列表 / 搜索（需要登录）。
+  Future<void> loadBooklists({
+    String query = '',
+    String type = '',
+    String languages = '',
+    int page = 1,
+    bool append = false,
+  }) async {
+    if (booklistsLoading || !loggedIn) return;
+    booklistsLoading = true;
+    booklistsError = '';
+    changed();
+    try {
+      final result = await read(
+        (o, s) => api.booklists(
+          o,
+          s,
+          page,
+          query: query,
+          type: type,
+          languages: languages,
+        ),
+      );
+      if (append && booklistPage != null) {
+        final existing = booklistPage!.lists.map((b) => b.id).toSet();
+        final merged = <Booklist>[
+          ...booklistPage!.lists,
+          ...result.lists.where((b) => !existing.contains(b.id)),
+        ];
+        booklistPage = BooklistPage(merged, result.page, result.totalPages);
+      } else {
+        booklistPage = result;
+      }
+    } catch (error) {
+      booklistsError = '$error';
+    } finally {
+      booklistsLoading = false;
+      changed();
     }
   }
 

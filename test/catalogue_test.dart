@@ -1,8 +1,8 @@
-import 'package:xlib/controller.dart';
-import 'package:xlib/domain.dart';
-import 'package:xlib/main.dart';
-import 'package:xlib/screens.dart';
-import 'package:xlib/weread/weread_controller.dart';
+import 'package:bookisle/controller.dart';
+import 'package:bookisle/domain.dart';
+import 'package:bookisle/main.dart';
+import 'package:bookisle/screens.dart';
+import 'package:bookisle/weread/weread_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

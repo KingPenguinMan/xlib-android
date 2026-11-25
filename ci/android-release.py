@@ -72,7 +72,7 @@ def build(directory, version, number):
     run("pwsh", "-NoProfile", "-File", APP / "scripts/sign-stable.ps1",
         "-Version", version, "-OutputDirectory", directory)
     shutil.copy2(APP / "build/app/outputs/mapping/release/mapping.txt", symbols)
-    files = [directory / f"xlib-android-v{version}-{abi}.apk" for abi in ABIS]
+    files = [directory / f"z-lib-android-v{version}-{abi}.apk" for abi in ABIS]
     with (directory / "SHA256SUMS.txt").open("w", encoding="ascii", newline="\n") as sums:
         for file in files:
             sums.write(f"{digest(file)}  {file.name}\n")
@@ -82,12 +82,12 @@ def publish(directory, tag, commit, marker, release):
     if release is None:
         notes = (APP / "releases" / (tag + "-stable") / "更新说明.md").read_text(encoding="utf-8-sig")
         release = api("/releases", {"tag_name": tag, "target_commitish": commit,
-                      "name": f"xlib Android {tag}", "body": notes + "\n\n" + marker,
+                      "name": f"z-lib Android {tag}", "body": notes + "\n\n" + marker,
                       "prerelease": False})
     if marker not in release["body"]:
         raise ValueError("Existing release belongs to a different publication")
     endpoint = f"/releases/{release['id']}/attach_files"
-    for name in [f"xlib-android-{tag}-{abi}.apk" for abi in ABIS] + ["SHA256SUMS.txt"]:
+    for name in [f"z-lib-android-{tag}-{abi}.apk" for abi in ABIS] + ["SHA256SUMS.txt"]:
         path = directory / name
         def existing():
             return next((a for a in api(endpoint) if a["name"] == name), None)

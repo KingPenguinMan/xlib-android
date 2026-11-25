@@ -43,6 +43,7 @@ abstract class ApiTransport {
     String path, {
     String method = 'GET',
     Map<String, String>? form,
+    Map<String, dynamic>? json,
     Session? session,
     Duration timeout = const Duration(seconds: 14),
   });
@@ -67,6 +68,7 @@ class HttpTransport implements ApiTransport {
     String path, {
     String method = 'GET',
     Map<String, String>? form,
+    Map<String, dynamic>? json,
     Session? session,
     Duration timeout = const Duration(seconds: 14),
   }) async {
@@ -88,6 +90,10 @@ class HttpTransport implements ApiTransport {
           HttpHeaders.acceptHeader,
           'application/json, text/html;q=0.9',
         );
+        // 只对 /papi/ 的请求加，EAPI 不需要（全局加会导致搜索返回空）。
+        if (uri.path.startsWith('/papi/')) {
+          req.headers.set('X-Requested-With', 'XMLHttpRequest');
+        }
         final cookieMap = cookies(uri.origin);
         if (session != null && session.valid) {
           req.headers.set('remix-userid', session.userId);
@@ -103,7 +109,10 @@ class HttpTransport implements ApiTransport {
             req.cookies.add(Cookie(entry.key, entry.value));
           }
         }
-        if (verb == 'POST') {
+        if (json != null) {
+          req.headers.contentType = ContentType.json;
+          req.write(jsonEncode(json));
+        } else if (verb == 'POST') {
           req.headers.contentType = ContentType(
             'application',
             'x-www-form-urlencoded',
@@ -351,30 +360,6 @@ class LibraryApi {
     return session;
   }
 
-  Future<BookPage> search(
-    String origin,
-    Session? session,
-    String query,
-    int page,
-    String format,
-    String language, {
-    int? yearFrom,
-  }) async {
-    final form = {'message': query, 'page': '$page', 'limit': '30'};
-    if (format.isNotEmpty) form['extensions[]'] = format.toLowerCase();
-    if (language.isNotEmpty) form['languages[]'] = language;
-    // 线路支持按出版年下限过滤，用来做「新书上架」这类板块。
-    if (yearFrom != null) form['yearFrom'] = '$yearFrom';
-    final r = await transport.request(
-      origin,
-      '/eapi/book/search',
-      method: 'POST',
-      form: form,
-      session: session,
-    );
-    return _resolveCovers(BookPage.fromJson(decode(r), page), origin);
-  }
-
   Future<Book> details(String origin, Session session, Book book) async {
     if (!book.downloadable) throw const ApiException('此记录缺少图书标识，请重新搜索书名');
     try {
@@ -391,17 +376,196 @@ class LibraryApi {
   }
 
   Future<Book> _fetchDetails(String origin, Session session, Book book) async {
+    try {
+      // 主路径：EAPI 详情。
+      final r = await transport.request(
+        origin,
+        '/eapi/book/${Uri.encodeComponent(book.id)}/${Uri.encodeComponent(book.hash)}',
+        session: session,
+      );
+      final data = decode(r);
+      final raw = Map<String, dynamic>.from(data['book'] as Map? ?? {});
+      raw.putIfAbsent('id', () => book.id);
+      raw.putIfAbsent('hash', () => book.hash);
+      final detailed = Book.fromJson({...book.toJson(), ...raw});
+      final resolved = _resolveCovers(
+        BookPage([detailed], 1, 1),
+        origin,
+      ).books.first;
+      // EAPI 详情里没有文字评论和作者主页，补抓详情页 HTML 填上。
+      final enriched = await _enrichFromHtml(origin, session, resolved);
+      return enriched;
+    } on ApiException catch (error) {
+      // 降级：EAPI 被封 / hash 不被认时，读网页详情页。
+      if (!_isApiBlocked(error.message)) rethrow;
+      return _fetchDetailsViaHtml(origin, session, book);
+    }
+  }
+
+  /// 从详情页 HTML 补齐文字评论和作者主页（EAPI 详情里没有这两项）。
+  Future<Book> _enrichFromHtml(
+    String origin,
+    Session session,
+    Book book,
+  ) async {
+    try {
+      final r = await transport.request(
+        origin,
+        '/book/${Uri.encodeComponent(book.hash)}',
+        session: session,
+        timeout: const Duration(seconds: 20),
+      );
+      final body = r.body;
+      final authorLink = RegExp(r"href='(/author/[^']+)'")
+          .firstMatch(body)
+          ?.group(1);
+      // 文字评论条数：官方页面 Comments N。
+      final commentCount =
+          int.tryParse(
+            RegExp(r'Comments\s+(\d+)').firstMatch(body)?.group(1) ?? '',
+          ) ??
+          0;
+      final reviewRe = RegExp(
+        r'"reviewBody"\s*:\s*"((?:[^"\\]|\\.)*)"'
+        r'[\s\S]{0,400}?"name"\s*:\s*"([^"]*)"'
+        r'[\s\S]{0,400}?"ratingValue"\s*:\s*"?([\d.]+)"?'
+        r'[\s\S]{0,300}?"datePublished"\s*:\s*"([^"]*)"',
+      );
+      final reviewList = <Map<String, dynamic>>[];
+      for (final m in reviewRe.allMatches(body)) {
+        var text = m.group(1) ?? '';
+        text = text
+            .replaceAll('&lt;', '<')
+            .replaceAll('&gt;', '>')
+            .replaceAll('&quot;', '"')
+            .replaceAll('&#39;', "'")
+            .replaceAll('&amp;', '&')
+            .replaceAll(RegExp(r'<[^>]+>'), ' ')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+        if (text.isEmpty) continue;
+        reviewList.add({
+          'body': text,
+          'author': m.group(2) ?? '',
+          'rating': m.group(3) ?? '',
+          'date': m.group(4) ?? '',
+        });
+        if (reviewList.length >= 30) break;
+      }
+      return Book.fromJson({
+        ...book.toJson(),
+        if (authorLink != null) 'authorProfile': authorLink,
+        if (commentCount > 0) 'commentCount': commentCount,
+        if (reviewList.isNotEmpty) 'reviewJson': jsonEncode(reviewList),
+      });
+    } catch (_) {
+      return book;
+    }
+  }
+
+  /// 网页详情页 `/book/<hash>`，解析里面的书卡片。
+  Future<Book> _fetchDetailsViaHtml(
+    String origin,
+    Session session,
+    Book book,
+  ) async {
     final r = await transport.request(
       origin,
-      '/eapi/book/${Uri.encodeComponent(book.id)}/${Uri.encodeComponent(book.hash)}',
+      '/book/${Uri.encodeComponent(book.hash)}',
       session: session,
+      timeout: const Duration(seconds: 24),
     );
-    final data = decode(r);
-    final raw = Map<String, dynamic>.from(data['book'] as Map? ?? {});
-    raw.putIfAbsent('id', () => book.id);
-    raw.putIfAbsent('hash', () => book.hash);
-    final detailed = Book.fromJson({...book.toJson(), ...raw});
-    return _resolveCovers(BookPage([detailed], 1, 1), origin).books.first;
+    // 详情页里的作者主页链接：/author/<urlencoded 作者名>（单引号 href）。
+    final authorLink = RegExp(r"href='(/author/[^']+)'")
+        .firstMatch(r.body)
+        ?.group(1);
+    // 页面里的 JSON-LD 汇总评分：ratingValue / ratingCount。
+    final ratingMatch = RegExp(r'"ratingValue"\s*:\s*"?([\d.]+)"?')
+        .firstMatch(r.body);
+    final countMatch = RegExp(r'"ratingCount"\s*:\s*"?(\d+)"?')
+        .firstMatch(r.body);
+    final rating = double.tryParse(ratingMatch?.group(1) ?? '') ?? 0.0;
+    final ratingCount = int.tryParse(countMatch?.group(1) ?? '') ?? 0;
+    // 文字评论条数（Comments N）。
+    final commentCount =
+        int.tryParse(
+          RegExp(r'Comments\s+(\d+)').firstMatch(r.body)?.group(1) ?? '',
+        ) ??
+        0;
+    // 解析 JSON-LD 里的文字评论：每条 review 抓正文/作者/日期/评分。
+    final reviewList = <Map<String, dynamic>>[];
+    final reviewRe = RegExp(
+      r'"reviewBody"\s*:\s*"((?:[^"\\]|\\.)*)"'
+      r'[\s\S]{0,400}?"name"\s*:\s*"([^"]*)"'
+      r'[\s\S]{0,400}?"ratingValue"\s*:\s*"?([\d.]+)"?'
+      r'[\s\S]{0,300}?"datePublished"\s*:\s*"([^"]*)"',
+    );
+    for (final m in reviewRe.allMatches(r.body)) {
+      var text = m.group(1) ?? '';
+      // 反转义 &lt;p&gt; 等 HTML 实体与 \n
+      text = text
+          .replaceAll('&lt;', '<')
+          .replaceAll('&gt;', '>')
+          .replaceAll('&quot;', '"')
+          .replaceAll('&#39;', "'")
+          .replaceAll('&amp;', '&')
+          .replaceAll(RegExp(r'<[^>]+>'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (text.isEmpty) continue;
+      reviewList.add({
+        'body': text,
+        'author': m.group(2) ?? '',
+        'rating': m.group(3) ?? '',
+        'date': m.group(4) ?? '',
+      });
+      if (reviewList.length >= 30) break;
+    }
+    final reviewJson = jsonEncode(reviewList);
+    final parsed = _parseBookcards(r.body);
+    // 详情页里往往还有「相关推荐」的书卡，不能直接取第一张，
+    // 必须按 id / hash 找回当前这本书，否则会把推荐位当成正文。
+    Book? matched;
+    for (final b in parsed) {
+      if (b.id == book.id || b.hash == book.hash) {
+        matched = b;
+        break;
+      }
+    }
+    if (matched != null) {
+      return Book.fromJson({
+        ...book.toJson(),
+        ...matched.toJson(),
+        'id': book.id.isNotEmpty ? book.id : matched.id,
+        'hash': book.hash.isNotEmpty ? book.hash : matched.hash,
+        if (authorLink != null) 'authorProfile': authorLink,
+        'rating': rating,
+        'ratingCount': ratingCount,
+        'commentCount': commentCount,
+        if (reviewList.isNotEmpty) 'reviewJson': reviewJson,
+      });
+    }
+    // 没匹配上时，只有一张卡才敢用（避免再次拿错书）。
+    if (parsed.length == 1) {
+      final only = parsed.first;
+      return Book.fromJson({
+        ...book.toJson(),
+        ...only.toJson(),
+        if (authorLink != null) 'authorProfile': authorLink,
+        'rating': rating,
+        'ratingCount': ratingCount,
+        'commentCount': commentCount,
+        if (reviewList.isNotEmpty) 'reviewJson': reviewJson,
+      });
+    }
+    return Book.fromJson({
+      ...book.toJson(),
+      if (authorLink != null) 'authorProfile': authorLink,
+      'rating': rating,
+      'ratingCount': ratingCount,
+      'commentCount': commentCount,
+      if (reviewList.isNotEmpty) 'reviewJson': reviewJson,
+    });
   }
 
   bool _isInvalidHash(ApiException error) =>
@@ -409,19 +573,26 @@ class LibraryApi {
 
   /// 用书名搜索，按 id 优先匹配回一本带正确 hash 的书。
   Future<Book?> _resolveBook(String origin, Session session, Book book) async {
+    // 优先走网页搜索：EAPI 被全线封禁，网页版结果里带 downloadPath 和正确
+    // 的网页 hash，能让下载/详情兜底都拿到有效数据。
+    try {
+      final page = await _searchViaHtml(origin, session, book.title, 1, '', '');
+      for (final candidate in page.books) {
+        if (candidate.id == book.id ||
+            (candidate.title == book.title &&
+                (book.author.isEmpty || candidate.author == book.author))) {
+          return candidate;
+        }
+      }
+    } catch (_) {
+      // 网页回查失败再退回 EAPI 搜索。
+    }
     try {
       final page = await search(origin, session, book.title, 1, '', '');
       for (final candidate in page.books) {
         if (candidate.id == book.id &&
             candidate.hash.isNotEmpty &&
             candidate.hash != book.hash) {
-          return candidate;
-        }
-      }
-      for (final candidate in page.books) {
-        if (candidate.title == book.title &&
-            candidate.hash.isNotEmpty &&
-            (book.author.isEmpty || candidate.author == book.author)) {
           return candidate;
         }
       }
@@ -451,6 +622,101 @@ class LibraryApi {
   }
 
   /// `/eapi/user/book/{id}/save` — 收藏一本书。
+  /// 抓一本书的评论：返回官方评论总数 + 能解析到的评论内容。
+  ///
+  /// 评论总数在详情页 HTML 的 `Comments N` 里（准确）；
+  /// 评论正文由网页 JS 动态加载，静态 HTML 通常只嵌入少量，
+  /// 因此列表可能少于总数，界面需提示去看全部。
+  Future<({int total, List<Map<String, dynamic>> items})> bookComments(
+    String origin,
+    Session session,
+    Book book,
+  ) async {
+    try {
+      final r = await transport.request(
+        origin,
+        '/book/${Uri.encodeComponent(book.hash)}',
+        session: session,
+        timeout: const Duration(seconds: 20),
+      );
+      final body = r.body;
+      final total =
+          int.tryParse(
+            RegExp(r'Comments\s+(\d+)').firstMatch(body)?.group(1) ?? '',
+          ) ??
+          0;
+      final items = <Map<String, dynamic>>[];
+      final reviewRe = RegExp(
+        r'"reviewBody"\s*:\s*"((?:[^"\\]|\\.)*)"'
+        r'[\s\S]{0,400}?"name"\s*:\s*"([^"]*)"'
+        r'[\s\S]{0,400}?"ratingValue"\s*:\s*"?([\d.]+)"?'
+        r'[\s\S]{0,300}?"datePublished"\s*:\s*"([^"]*)"',
+      );
+      for (final m in reviewRe.allMatches(body)) {
+        var text = m.group(1) ?? '';
+        text = text
+            .replaceAll('&lt;', '<')
+            .replaceAll('&gt;', '>')
+            .replaceAll('&quot;', '"')
+            .replaceAll('&#39;', "'")
+            .replaceAll('&amp;', '&')
+            .replaceAll(RegExp(r'<[^>]+>'), ' ')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+        if (text.isEmpty) continue;
+        items.add({
+          'body': text,
+          'author': m.group(2) ?? '',
+          'rating': m.group(3) ?? '',
+          'date': m.group(4) ?? '',
+        });
+        if (items.length >= 30) break;
+      }
+      return (total: total, items: items);
+    } catch (_) {
+      return (total: 0, items: const <Map<String, dynamic>>[]);
+    }
+  }
+
+  /// 作者页：`/author/<urlencoded 作者名>`，解析页面里的书籍卡片。
+  Future<List<Book>> authorBooks(
+    String origin,
+    Session session,
+    String authorProfile,
+  ) async {
+    final path = authorProfile.startsWith('/')
+        ? authorProfile
+        : '/author/${Uri.encodeComponent(authorProfile)}';
+    final r = await transport.request(
+      origin,
+      path,
+      session: session,
+      timeout: const Duration(seconds: 24),
+    );
+    return _resolveCovers(
+      BookPage(_parseBookcards(r.body), 1, 1),
+      origin,
+    ).books;
+  }
+
+  /// 给书籍投票评分（zlib 官方的评价方式）。
+  ///
+  /// `PUT /papi/user/book/{id}/vote`，body 为 score（+1 推荐 / -1 不推荐）。
+  Future<void> voteBook(
+    String origin,
+    Session session,
+    String bookId,
+    int score,
+  ) async {
+    await transport.request(
+      origin,
+      '/papi/user/book/${Uri.encodeComponent(bookId)}/vote',
+      method: 'PUT',
+      form: {'score': '$score'},
+      session: session,
+    );
+  }
+
   Future<void> saveBook(String origin, Session session, String bookId) async {
     final r = await transport.request(
       origin,
@@ -479,15 +745,56 @@ class LibraryApi {
     return Map<String, dynamic>.from(decode(r)['user'] as Map? ?? {});
   }
 
+  /// 从详情页里提取「在线阅读器」地址。
+  ///
+  /// 阅读器走 `reader.<线路>/read/...`，靠 URL 里的 file_access_token 取文件，
+  /// 不经过 `/dl/` 下载通道，因此不消耗每日下载额度。
+  Future<String?> readUrl(String origin, Session session, Book book) async {
+    try {
+      final r = await transport.request(
+        origin,
+        '/book/${Uri.encodeComponent(book.hash)}',
+        session: session,
+        timeout: const Duration(seconds: 20),
+      );
+      final match = RegExp(r'href="(https://reader\.[^"]+/read/[^"]+)"')
+          .firstMatch(r.body);
+      return match?.group(1);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<String> fileUrl(String origin, Session session, Book book) async {
     if (!book.downloadable) throw const ApiException('此记录缺少下载标识，请重新搜索');
     try {
+      // 主路径：EAPI 换取下载链接。
       return await _fetchFileUrl(origin, session, book);
     } catch (error) {
-      // 和详情一样：分类页的书缺短 hash，先用书名回查补全再重试。
+      // EAPI 被封或 hash 不被认时，退到网页卡片里的直链（/dl/xxx）。
+      final blocked = error is ApiException && _isApiBlocked(error.message);
+      if (blocked) {
+        final direct = book.downloadPath.trim();
+        if (direct.isNotEmpty) {
+          return direct.startsWith('http') ? direct : '$origin$direct';
+        }
+        // 兜底直链也没有：用网页详情页补全 downloadPath 后再取。
+        final fixed = await _fetchDetailsViaHtml(origin, session, book);
+        final path2 = fixed.downloadPath.trim();
+        if (path2.isNotEmpty) {
+          return path2.startsWith('http') ? path2 : '$origin$path2';
+        }
+      }
       if (error is ApiException && _isInvalidHash(error)) {
         final fixed = await _resolveBook(origin, session, book);
-        if (fixed != null) return _fetchFileUrl(origin, session, fixed);
+        if (fixed != null) {
+          // 回查回来优先用网页直链；没有再退回 EAPI（可能 hash 已补正）。
+          final dp = fixed.downloadPath.trim();
+          if (dp.isNotEmpty) {
+            return dp.startsWith('http') ? dp : '$origin$dp';
+          }
+          return _fetchFileUrl(origin, session, fixed);
+        }
       }
       rethrow;
     }
@@ -576,6 +883,78 @@ class LibraryApi {
   /// 分类页是服务端渲染的 HTML，书卡是 `<z-bookcard>` 自定义元素，
   /// 属性与插槽里带着完整元数据，所以能解析出和搜索接口一样的 Book。
   /// 线路没提供按分类过滤的接口（`categories[]` 实测无效）。
+  Future<BookPage> search(
+    String origin,
+    Session? session,
+    String query,
+    int page,
+    String format,
+    String language, {
+    int? yearFrom,
+  }) async {
+    final form = {'message': query, 'page': '$page', 'limit': '30'};
+    if (format.isNotEmpty) form['extensions[]'] = format.toLowerCase();
+    if (language.isNotEmpty) form['languages[]'] = language;
+    if (yearFrom != null) form['yearFrom'] = '$yearFrom';
+    try {
+      final r = await transport.request(
+        origin,
+        '/eapi/book/search',
+        method: 'POST',
+        form: form,
+        session: session,
+      );
+      return _resolveCovers(BookPage.fromJson(decode(r), page), origin);
+    } on ApiException catch (error) {
+      // 线路把 EAPI 封了（400 Access denied）时，降级走网页搜索页。
+      if (!_isApiBlocked(error.message)) rethrow;
+      return _searchViaHtml(origin, session, query, page, format, language);
+    }
+  }
+
+  /// 判断错误是不是「EAPI 被线路封禁」这类，需要降级到 HTML。
+  bool _isApiBlocked(String message) {
+    final text = message.toLowerCase();
+    return text.contains('access denied') ||
+        text.contains('invalid hash') ||
+        text.contains('403') ||
+        text.contains('404');
+  }
+
+  /// 网页搜索页 `/s/<关键词>?page=N`，EAPI 不可用时的兜底。
+  Future<BookPage> _searchViaHtml(
+    String origin,
+    Session? session,
+    String query,
+    int page,
+    String format,
+    String language,
+  ) async {
+    final params = <String>['page=$page'];
+    if (format.isNotEmpty) params.add('extensions[]=${format.toLowerCase()}');
+    if (language.isNotEmpty) params.add('languages[]=$language');
+    final path = '/s/${Uri.encodeComponent(query)}?${params.join('&')}';
+    final r = await transport.request(
+      origin,
+      path,
+      session: session,
+      timeout: const Duration(seconds: 24),
+    );
+    final books = _parseBookcards(r.body);
+    var hasNext = false;
+    for (final m in RegExp(r'/s/[^"?]+\?[^"]*page=(\d+)').allMatches(r.body)) {
+      final v = int.tryParse(m.group(1) ?? '') ?? 0;
+      if (v > page) {
+        hasNext = true;
+        break;
+      }
+    }
+    return BookPage(books, page, hasNext ? page + 1 : page);
+  }
+
+  /// 分类页是服务端渲染的 HTML，书卡是 `<z-bookcard>` 自定义元素，
+  /// 属性与插槽里带着完整元数据，所以能解析出和搜索接口一样的 Book。
+  /// 线路没提供按分类过滤的接口（`categories[]` 实测无效）。
   Future<BookPage> categoryBooks(
     String origin,
     int categoryId,
@@ -586,38 +965,7 @@ class LibraryApi {
       '/category/$categoryId?page=$page',
       timeout: const Duration(seconds: 24),
     );
-    final books = <Book>[];
-    for (final card in RegExp(
-      r'<z-bookcard([^>]*)>(.*?)</z-bookcard>',
-      dotAll: true,
-    ).allMatches(response.body)) {
-      final attrs = card.group(1) ?? '';
-      final inner = card.group(2) ?? '';
-      final href = _attr(attrs, 'href') ?? '';
-      final hash = RegExp(r'^/book/([^/]+)/').firstMatch(href)?.group(1) ?? '';
-      final id = _attr(attrs, 'id') ?? '';
-      if (hash.isEmpty || id.isEmpty) continue;
-      var cover =
-          RegExp(r'data-src="([^"]+)"').firstMatch(inner)?.group(1) ?? '';
-      if (cover.startsWith('http://')) {
-        cover = cover.replaceFirst('http://', 'https://');
-      }
-      books.add(
-        Book.fromJson({
-          'id': id,
-          'hash': hash,
-          'title': _slot(inner, 'title'),
-          'author': _slot(inner, 'author'),
-          'cover': cover,
-          'extension': _attr(attrs, 'extension') ?? '',
-          'filesizeString': _attr(attrs, 'filesize') ?? '',
-          'year': _attr(attrs, 'year') ?? '',
-          'language': _attr(attrs, 'language') ?? '',
-          'publisher': _attr(attrs, 'publisher') ?? '',
-          'isbn': _attr(attrs, 'isbn') ?? '',
-        }),
-      );
-    }
+    final books = _parseBookcards(response.body);
     if (books.isEmpty) {
       throw const ApiException('这个分类暂时读不出书单，请稍后重试', retryable: true);
     }
@@ -656,5 +1004,321 @@ class LibraryApi {
       throw const ApiException('分类清单暂时读取不到，请稍后重试', retryable: true);
     }
     return result;
+  }
+
+  /// 我收藏的书单（`/booklists/favorite`，需要登录）。
+  Future<BooklistPage> favoriteBooklists(String origin, Session session) =>
+      _parseBooklistPage(origin, session, '/booklists/favorite');
+
+  /// 我的书单（`/booklists/my`，需要登录）。
+  Future<BooklistPage> myBooklists(String origin, Session session) =>
+      _parseBooklistPage(origin, session, '/booklists/my');
+
+  /// 请求书单页并解析 `<z-booklist>` 卡片。
+  Future<BooklistPage> _parseBooklistPage(
+    String origin,
+    Session session,
+    String path,
+  ) async {
+    final response = await transport.request(
+      origin,
+      path,
+      session: session,
+      timeout: const Duration(seconds: 20),
+    );
+    final lists = <Booklist>[];
+    final seen = <String>{};
+    for (final match in RegExp(
+      r'<z-booklist([^>]*)>([\s\S]*?)</z-booklist>',
+      dotAll: true,
+    ).allMatches(response.body)) {
+      final attrs = match.group(1) ?? '';
+      final inner = match.group(2) ?? '';
+      final id = _attr(attrs, 'id') ?? '';
+      final rawTopic = _attr(attrs, 'topic') ?? '';
+      final href = _attr(attrs, 'href') ?? '';
+      if (href.contains(r'${')) continue;
+      final topic = _cleanTemplate(rawTopic);
+      if (id.isEmpty || topic.isEmpty) continue;
+      if (!seen.add(id)) continue;
+      final desc = _cleanTemplate(_attr(attrs, 'description') ?? '')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      final qty = int.tryParse(_attr(attrs, 'quantity') ?? '') ?? 0;
+      final isFav = RegExp(r'\bfavorite\b').hasMatch(attrs);
+      final author = _cleanTemplate(_attr(attrs, 'author') ?? '');
+      final authorProfile = _attr(attrs, 'authorProfile') ?? '';
+      final views = _attr(attrs, 'views') ?? '';
+      final comments = int.tryParse(_attr(attrs, 'comments') ?? '') ?? 0;
+      final covers = RegExp(r'<img[^>]*data-src="([^"]+)"')
+          .allMatches(inner)
+          .map((m) => m.group(1)!)
+          .where((u) => u.isNotEmpty)
+          .take(16)
+          .toList();
+      lists.add(
+        Booklist(
+          id: id,
+          title: topic,
+          href: href,
+          description: desc,
+          quantity: qty,
+          isFavorite: isFav,
+          author: author,
+          authorProfile: authorProfile,
+          views: views,
+          covers: covers,
+          comments: comments,
+        ),
+      );
+    }
+    return BooklistPage(lists, 1, 1);
+  }
+
+  /// 收藏 / 取消收藏书单（`/papi/booklist/{id}/favorite/{add|remove}`）。
+  Future<void> favoriteBooklist(
+    String origin,
+    Session session,
+    String listId, {
+    required bool favorite,
+  }) async {
+    final response = await transport.request(
+      origin,
+      '/papi/booklist/${Uri.encodeComponent(listId)}/favorite/${favorite ? 'add' : 'remove'}',
+      method: favorite ? 'POST' : 'DELETE',
+      session: session,
+      timeout: const Duration(seconds: 20),
+    );
+    if (response.status >= 400) {
+      throw ApiException('收藏操作失败（${response.status}）');
+    }
+  }
+
+  /// 把书加入已有书单（`/papi/booklist/{listId}/add-book/{bookId}`）。
+  Future<void> addBookToBooklist(
+    String origin,
+    Session session,
+    String bookId,
+    String listId,
+  ) async {
+    final response = await transport.request(
+      origin,
+      '/papi/booklist/${Uri.encodeComponent(listId)}/add-book/${Uri.encodeComponent(bookId)}',
+      session: session,
+      timeout: const Duration(seconds: 20),
+    );
+    if (response.status >= 400) {
+      throw ApiException('加入书单失败（${response.status}）');
+    }
+  }
+
+  /// 删除书单（`/papi/booklist/{listId}/delete`）。
+  Future<void> deleteBooklist(
+    String origin,
+    Session session,
+    String listId,
+  ) async {
+    final response = await transport.request(
+      origin,
+      '/papi/booklist/${Uri.encodeComponent(listId)}/delete',
+      session: session,
+      timeout: const Duration(seconds: 20),
+    );
+    if (response.status >= 400) {
+      throw ApiException('删除书单失败（${response.status}）');
+    }
+  }
+
+  /// 创建书单（`/papi/booklist/create`，需要登录）。
+  Future<void> createBooklist(
+    String origin,
+    Session session, {
+    required String title,
+    String description = '',
+    bool isPrivate = false,
+  }) async {
+    final response = await transport.request(
+      origin,
+      '/papi/booklist/create',
+      method: 'POST',
+      json: {
+        'title': title,
+        'description': description,
+        'color': '0',
+        'private': isPrivate ? '1' : '0',
+      },
+      session: session,
+      timeout: const Duration(seconds: 20),
+    );
+    final data = jsonDecode(response.body);
+    // 官网成功时返回 {"readlist": {...}}，并没有 success 字段。
+    final ok =
+        response.status < 400 &&
+        data is Map &&
+        (data['readlist'] != null || data['success'] == 1);
+    if (!ok) {
+      throw ApiException(
+        '创建书单失败：${(data is Map ? data['error'] : null) ?? '未知错误'}',
+      );
+    }
+  }
+
+  /// 清掉 JS 模板占位符（`${...}`），避免把模板当成真实数据。
+  String _cleanTemplate(String value) =>
+      value.replaceAll(RegExp(r'\$\{[^}]*\}'), '').trim();
+
+  /// 把页面里的 `<z-bookcard>` 卡片解析成书籍列表（分类页和书单详情共用）。
+  List<Book> _parseBookcards(String html) {
+    final books = <Book>[];
+    for (final card in RegExp(
+      r'<z-bookcard([^>]*)>(.*?)</z-bookcard>',
+      dotAll: true,
+    ).allMatches(html)) {
+      final attrs = card.group(1) ?? '';
+      final inner = card.group(2) ?? '';
+      final href = _attr(attrs, 'href') ?? '';
+      final hash = RegExp(r'^/book/([^/]+)/').firstMatch(href)?.group(1) ?? '';
+      final id = _attr(attrs, 'id') ?? '';
+      if (hash.isEmpty || id.isEmpty) continue;
+      var cover =
+          RegExp(r'data-src="([^"]+)"').firstMatch(inner)?.group(1) ?? '';
+      if (cover.startsWith('http://')) {
+        cover = cover.replaceFirst('http://', 'https://');
+      }
+      books.add(
+        Book.fromJson({
+          'id': id,
+          'hash': hash,
+          'title': _slot(inner, 'title'),
+          'author': _slot(inner, 'author'),
+          'cover': cover,
+          'downloadPath': _attr(attrs, 'download') ?? '',
+          'extension': _attr(attrs, 'extension') ?? '',
+          'filesizeString': _attr(attrs, 'filesize') ?? '',
+          'year': _attr(attrs, 'year') ?? '',
+          'language': _attr(attrs, 'language') ?? '',
+          'publisher': _attr(attrs, 'publisher') ?? '',
+          'isbn': _attr(attrs, 'isbn') ?? '',
+        }),
+      );
+    }
+    return books;
+  }
+
+  /// `/booklists?searchQuery=xxx&page=N` — 社区书单列表 / 搜索（需要登录）。
+  ///
+  /// 书单页是服务端渲染的 HTML，这里解析 `<z-booklist>` 卡片。
+  /// 搜索参数是 `searchQuery`（从页面 JS 的 useSearch 里确认的）。
+  Future<BooklistPage> booklists(
+    String origin,
+    Session session,
+    int page, {
+    String query = '',
+    String type = '',
+    String languages = '',
+  }) async {
+    final params = <String>['page=$page'];
+    final q = query.trim();
+    if (q.isNotEmpty) params.add('searchQuery=${Uri.encodeQueryComponent(q)}');
+    if (type.isNotEmpty) params.add('type=$type');
+    if (languages.isNotEmpty) params.add('languages=$languages');
+    final path = '/booklists?${params.join('&')}';
+    final response = await transport.request(
+      origin,
+      path,
+      session: session,
+      timeout: const Duration(seconds: 24),
+    );
+    final lists = <Booklist>[];
+    final seen = <String>{};
+    // 书单卡片是 `<z-booklist>` 自定义元素，元数据都在属性里。
+    for (final match in RegExp(
+      r'<z-booklist([^>]*)>([\s\S]*?)</z-booklist>',
+      dotAll: true,
+    ).allMatches(response.body)) {
+      final attrs = match.group(1) ?? '';
+      final inner = match.group(2) ?? '';
+      final id = _attr(attrs, 'id') ?? '';
+      final href = _attr(attrs, 'href') ?? '';
+      if (href.contains(r'${')) continue;
+      final topic = _cleanTemplate(_attr(attrs, 'topic') ?? '');
+      if (id.isEmpty || topic.isEmpty) continue;
+      if (!seen.add(id)) continue;
+      final desc = _cleanTemplate(_attr(attrs, 'description') ?? '')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      final qty = int.tryParse(_attr(attrs, 'quantity') ?? '') ?? 0;
+      final isFav = RegExp(r'\bfavorite\b').hasMatch(attrs);
+      final author = _cleanTemplate(_attr(attrs, 'author') ?? '');
+      final authorProfile = _attr(attrs, 'authorProfile') ?? '';
+      final views = _attr(attrs, 'views') ?? '';
+      final comments = int.tryParse(_attr(attrs, 'comments') ?? '') ?? 0;
+      final covers = RegExp(r'<img[^>]*data-src="([^"]+)"')
+          .allMatches(inner)
+          .map((m) => m.group(1)!)
+          .where((u) => u.isNotEmpty)
+          .take(16)
+          .toList();
+      lists.add(
+        Booklist(
+          id: id,
+          title: topic,
+          href: href,
+          description: desc,
+          quantity: qty,
+          isFavorite: isFav,
+          author: author,
+          authorProfile: authorProfile,
+          views: views,
+          covers: covers,
+          comments: comments,
+        ),
+      );
+    }
+    if (lists.isEmpty) {
+      throw const ApiException('书单列表读不出来，页面结构可能变了', retryable: true);
+    }
+    var hasNext = false;
+    for (final match in RegExp(
+      r'/booklists?\?page=(\d+)',
+    ).allMatches(response.body)) {
+      final value = int.tryParse(match.group(1) ?? '') ?? 0;
+      if (value > page) {
+        hasNext = true;
+        break;
+      }
+    }
+    return BooklistPage(lists, page, hasNext ? page + 1 : page);
+  }
+
+  /// `/booklist/{id}/{hash}/...?page=N` — 某个书单里的书。
+  Future<BookPage> booklistBooks(
+    String origin,
+    Session session,
+    String href,
+    int page,
+  ) async {
+    final sep = href.contains('?') ? '&' : '?';
+    final response = await transport.request(
+      origin,
+      '$href${sep}page=$page',
+      session: session,
+      timeout: const Duration(seconds: 24),
+    );
+    final books = _parseBookcards(response.body);
+    if (books.isEmpty) {
+      throw const ApiException('这个书单暂时读不出书，请稍后重试', retryable: true);
+    }
+    var hasNext = false;
+    for (final match in RegExp(
+      r'/booklists?/\d+\?page=(\d+)',
+    ).allMatches(response.body)) {
+      final value = int.tryParse(match.group(1) ?? '') ?? 0;
+      if (value > page) {
+        hasNext = true;
+        break;
+      }
+    }
+    return BookPage(books, page, hasNext ? page + 1 : page);
   }
 }

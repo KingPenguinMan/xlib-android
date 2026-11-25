@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api.dart';
 import 'controller.dart';
+import 'eink.dart';
 import 'domain.dart';
 
 class BrandMark extends StatelessWidget {
@@ -13,11 +14,40 @@ class BrandMark extends StatelessWidget {
     height: size,
     clipBehavior: Clip.antiAlias,
     decoration: BoxDecoration(
-      color: Colors.white,
+      color: const Color(0xFFFAF8EF),
       borderRadius: BorderRadius.circular(size * .3),
     ),
-    child: const Center(child: Text('x', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: Color(0xFF35542B)))),
+    child: CustomPaint(painter: _XLogoPainter()),
   );
+}
+
+/// xlib 的 X 形 logo（与桌面图标同款：米白底 + 深绿 X）。
+class _XLogoPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF263822)
+      ..style = PaintingStyle.fill;
+    double sx(double x) => x / 108 * size.width;
+    double sy(double y) => y / 108 * size.height;
+    final left = Path()
+      ..moveTo(sx(29), sy(28))
+      ..lineTo(sx(43), sy(28))
+      ..lineTo(sx(79), sy(80))
+      ..lineTo(sx(65), sy(80))
+      ..close();
+    final right = Path()
+      ..moveTo(sx(65), sy(28))
+      ..lineTo(sx(79), sy(28))
+      ..lineTo(sx(43), sy(80))
+      ..lineTo(sx(29), sy(80))
+      ..close();
+    canvas.drawPath(left, paint);
+    canvas.drawPath(right, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class Pill extends StatelessWidget {
@@ -89,7 +119,7 @@ class BookCover extends StatelessWidget {
         Image.network(
           url,
           fit: BoxFit.cover,
-          headers: const {'User-Agent': 'Mozilla/5.0 xlib-android'},
+          headers: const {'User-Agent': 'Mozilla/5.0 z-lib-android'},
           errorBuilder: (_, e, s) =>
               allowFallback && fallbackCover.isNotEmpty && url != fallbackCover
               ? remoteCover(fallbackCover, allowFallback: false)
@@ -302,7 +332,8 @@ Future<void> guarded(
 Future<bool> showLogin(
   BuildContext context,
   ReaderController controller,
-) async =>    await showModalBottomSheet<bool>(
+) async =>
+    await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -361,10 +392,7 @@ class _LoginSheetState extends State<LoginSheet> {
           children: [
             const BrandMark(),
             const SizedBox(height: 18),
-            Text(
-              '欢迎来到 xlib',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
+            Text('欢迎来到 xlib', style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 6),
             Text(
               '使用你的 Z-Library 账户登录',
@@ -636,11 +664,11 @@ class ScrollQuickActions extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     return AnimatedSlide(
       offset: visible ? Offset.zero : const Offset(0, .35),
-      duration: const Duration(milliseconds: 180),
+      duration: uiDuration(180),
       curve: Curves.easeOut,
       child: AnimatedOpacity(
         opacity: visible ? 1 : 0,
-        duration: const Duration(milliseconds: 180),
+        duration: uiDuration(180),
         child: IgnorePointer(
           ignoring: !visible,
           child: Column(

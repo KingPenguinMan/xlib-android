@@ -15,7 +15,7 @@ foreach ($abi in 'arm64-v8a','armeabi-v7a','x86_64') {
     $inputApk = Join-Path $root "build/app/outputs/flutter-apk/app-$abi-release.apk"
     $metadata = & $aapt dump badging $inputApk
     if ($LASTEXITCODE -or $metadata[0] -notlike "*versionName='$Version'*") { throw "Version mismatch: $inputApk" }
-    $outputApk = Join-Path $release "xlib-android-v$Version-$abi.apk"
+    $outputApk = Join-Path $release "z-lib-android-v$Version-$abi.apk"
     & $signer sign --out $outputApk --v4-signing-enabled false --rotation-min-sdk-version 28 --lineage "$KeyDirectory/lineage.bin" --ks "$KeyDirectory/legacy.keystore" --ks-pass pass:android --next-signer --ks "$KeyDirectory/stable.p12" --ks-pass "file:$KeyDirectory/keystore.pass" $inputApk
     if ($LASTEXITCODE) { throw "Signing failed: $abi" }
     & $signer verify $outputApk

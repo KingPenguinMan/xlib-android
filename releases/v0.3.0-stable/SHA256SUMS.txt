@@ -1,0 +1,4 @@
+b1bffb3f64dc048360182a33d8b566b273683de0e5d53443b2b4b09feed90c7c *xlib-android-v0.3.0-arm64-v8a.apk
+4fdea61b92013c7094d74f4483bd8c215186a7dec2fe4c4acf7a89eb40a06ebe *xlib-android-v0.3.0-armeabi-v7a.apk
+11665fcccbe97f70eaaa2189775c3f23e24f9a5d2b36f4f6fb9029b2d5af4dad *xlib-kindle-v0.3.0-arm64-v8a.apk
+ffbbc2dccd15b8b621fe2447148c9e72eeb5f8240b1e139ce596f82d16778d77 *xlib-kindle-v0.3.0-armeabi-v7a.apk

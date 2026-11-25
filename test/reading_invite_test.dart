@@ -1,4 +1,4 @@
-import 'package:xlib/reading_invite.dart';
+import 'package:bookisle/reading_invite.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

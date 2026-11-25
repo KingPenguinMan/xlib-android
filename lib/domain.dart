@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:html/parser.dart' as html;
 
 const knownHosts = <String>[
@@ -64,7 +66,15 @@ class Book {
       isbn,
       description,
       date,
-      downloadedAt;
+      downloadedAt,
+      downloadPath,
+      authorProfile,
+      reviewJson;
+  final double rating;
+  final int ratingCount;
+
+  /// 文字评论条数（官方页面的 Comments N）。
+  final int commentCount;
   DateTime? get localDownloadTime {
     final raw = downloadedAt.trim();
     final timestamp = int.tryParse(raw);
@@ -93,6 +103,12 @@ class Book {
     this.description = '',
     this.date = '',
     this.downloadedAt = '',
+    this.downloadPath = '',
+    this.authorProfile = '',
+    this.rating = 0.0,
+    this.ratingCount = 0,
+    this.commentCount = 0,
+    this.reviewJson = '',
   });
   String get ref => '$id:$hash';
   bool get downloadable => id.isNotEmpty && hash.isNotEmpty;
@@ -111,6 +127,12 @@ class Book {
     description: description,
     date: date,
     downloadedAt: downloadedAt,
+    downloadPath: downloadPath,
+    authorProfile: authorProfile,
+    rating: rating,
+    ratingCount: ratingCount,
+    commentCount: commentCount,
+    reviewJson: reviewJson,
   );
   factory Book.fromJson(Map<String, dynamic> j) => Book(
     id: textValue(j['id']),
@@ -145,6 +167,12 @@ class Book {
           j['dateDownload'] ??
           j['date'],
     ),
+    downloadPath: textValue(j['downloadPath']),
+    authorProfile: textValue(j['authorProfile']),
+    rating: (j['rating'] is num)
+        ? (j['rating'] as num).toDouble()
+        : double.tryParse(textValue(j['rating'])) ?? 0.0,
+    ratingCount: int.tryParse(textValue(j['ratingCount'])) ?? 0,
   );
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -161,6 +189,12 @@ class Book {
     'description': description,
     'date': date,
     'downloaded_at': downloadedAt,
+    'downloadPath': downloadPath,
+    'authorProfile': authorProfile,
+    'rating': rating,
+    'ratingCount': ratingCount,
+    'commentCount': commentCount,
+    'reviewJson': reviewJson,
   };
 }
 
@@ -171,7 +205,8 @@ class ZlibCategory {
   const ZlibCategory(this.id, this.name);
 }
 
-class BookPage {  final List<Book> books;
+class BookPage {
+  final List<Book> books;
   final int page, totalPages;
   const BookPage(this.books, this.page, this.totalPages);
   factory BookPage.fromJson(Map<String, dynamic> j, int requested) {
@@ -260,4 +295,40 @@ class DownloadRecord {
     created: intValue(j['created']),
     book: Book.fromJson(Map<String, dynamic>.from(j['book'] as Map? ?? {})),
   );
+}
+
+/// 社区书单里的一个列表（标题 + ID + 详情路径 + 描述）。
+class Booklist {
+  final String id;
+  final String title;
+  final String href;
+  final String description;
+  final int quantity;
+  final bool isFavorite;
+  final String author;
+  final String authorProfile;
+  final String views;
+  final int comments;
+  final List<String> covers;
+  const Booklist({
+    required this.id,
+    required this.title,
+    this.href = '',
+    this.description = '',
+    this.quantity = 0,
+    this.isFavorite = false,
+    this.author = '',
+    this.authorProfile = '',
+    this.views = '',
+    this.comments = 0,
+    this.covers = const [],
+  });
+}
+
+/// 书单列表的一页。
+class BooklistPage {
+  final List<Booklist> lists;
+  final int page;
+  final int totalPages;
+  const BooklistPage(this.lists, this.page, this.totalPages);
 }

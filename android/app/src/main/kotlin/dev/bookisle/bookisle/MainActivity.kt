@@ -255,6 +255,35 @@ class MainActivity : FlutterActivity() {
             record.put("total", if (total > 0) total else 0); saveRecords()
             val tree = directoryUri(); var outputUri: Uri? = null; var local: File? = null
             if (tree != null) {
+                // 建文件前先删同名（含上次失败留下的 0 字节 / 半截文件），
+                // 否则 SAF 会自动改名成「xxx (1).epub」「xxx (2).epub」越堆越多。
+                try {
+                    val treeDocId = DocumentsContract.getTreeDocumentId(tree)
+                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, treeDocId)
+                    contentResolver.query(
+                        children,
+                        arrayOf(
+                            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        ),
+                        null, null, null,
+                    )?.use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val docId = cursor.getString(0) ?: continue
+                            val name = cursor.getString(1) ?: continue
+                            if (name == fileName) {
+                                try {
+                                    DocumentsContract.deleteDocument(
+                                        contentResolver,
+                                        DocumentsContract.buildDocumentUriUsingTree(tree, docId),
+                                    )
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                }
                 outputUri = try {
                     val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
                     DocumentsContract.createDocument(contentResolver, parent, mime(fileName), fileName)

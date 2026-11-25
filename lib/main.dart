@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'controller.dart';
+import 'eink.dart';
 import 'widgets.dart';
 import 'screens.dart';
 import 'reading_invite.dart';
@@ -16,7 +17,134 @@ void main() {
   runApp(ReaderApp(controller: ReaderController(), weread: WereadController()));
 }
 
+/// 墨水屏主题：只用黑、白、灰，圆角压小，卡片用描边代替阴影。
+ThemeData einkTheme(Brightness brightness) {
+  final dark = brightness == Brightness.dark;
+  final ink = dark ? const Color(0xfff2f2f2) : const Color(0xff101010);
+  final paper = dark ? const Color(0xff101010) : const Color(0xffffffff);
+  final line = dark ? const Color(0xff3a3a3a) : const Color(0xffd0d0d0);
+  final fill = dark ? const Color(0xff1c1c1c) : const Color(0xfff2f2f2);
+  final scheme = ColorScheme(
+    brightness: brightness,
+    primary: ink,
+    onPrimary: paper,
+    secondary: ink,
+    onSecondary: paper,
+    error: ink,
+    onError: paper,
+    surface: paper,
+    onSurface: ink,
+    surfaceContainerHighest: fill,
+    outlineVariant: line,
+  );
+  return ThemeData(
+    useMaterial3: true,
+    colorScheme: scheme,
+    brightness: brightness,
+    scaffoldBackgroundColor: paper,
+    // 墨水屏整屏刷新很慢，页面切换不做任何动画。
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: {TargetPlatform.android: _NoTransitionsBuilder()},
+    ),
+    navigationBarTheme: const NavigationBarThemeData(
+      iconTheme: WidgetStatePropertyAll(IconThemeData(size: 19)),
+      labelTextStyle: WidgetStatePropertyAll(
+        TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+      ),
+    ),
+    drawerTheme: DrawerThemeData(
+      backgroundColor: paper,
+      shape: const RoundedRectangleBorder(),
+    ),
+    appBarTheme: AppBarTheme(
+      backgroundColor: paper,
+      shape: Border(bottom: BorderSide(color: line, width: 1)),
+      surfaceTintColor: Colors.transparent,
+      systemOverlayStyle: dark
+          ? SystemUiOverlayStyle.light
+          : SystemUiOverlayStyle.dark,
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      filled: true,
+      fillColor: fill,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(4),
+        borderSide: BorderSide(color: line),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(48, 50),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size(48, 48),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+      ),
+    ),
+    cardTheme: CardThemeData(
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      color: paper,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(4),
+        side: BorderSide(color: line),
+      ),
+    ),
+    bottomSheetTheme: BottomSheetThemeData(
+      backgroundColor: paper,
+      showDragHandle: true,
+    ),
+    dividerTheme: DividerThemeData(color: line, space: 1),
+    textTheme: const TextTheme(
+      headlineLarge: TextStyle(
+        fontFamily: 'serif',
+        fontSize: 22,
+        fontWeight: FontWeight.w800,
+        height: 1.35,
+      ),
+      headlineSmall: TextStyle(
+        fontFamily: 'serif',
+        fontSize: 20,
+        fontWeight: FontWeight.w700,
+        height: 1.35,
+      ),
+      titleLarge: TextStyle(
+        fontFamily: 'serif',
+        fontSize: 17,
+        fontWeight: FontWeight.w700,
+      ),
+      titleMedium: TextStyle(
+        fontFamily: 'serif',
+        fontSize: 15,
+        fontWeight: FontWeight.w600,
+        height: 1.5,
+      ),
+      bodyMedium: TextStyle(fontSize: 14, height: 1.6),
+      bodySmall: TextStyle(fontSize: 12, height: 1.5),
+    ),
+  );
+}
+
+/// 不做任何转场动画，直接显示目标页。
+class _NoTransitionsBuilder extends PageTransitionsBuilder {
+  const _NoTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) => child;
+}
+
 ThemeData readerTheme(Brightness brightness) {
+  if (einkMode) return einkTheme(brightness);
   final dark = brightness == Brightness.dark;
   final scheme = ColorScheme.fromSeed(
     seedColor: const Color(0xff435534),
@@ -147,6 +275,10 @@ class _ReaderAppState extends State<ReaderApp> {
       theme: readerTheme(Brightness.light),
       darkTheme: readerTheme(Brightness.dark),
       themeMode: widget.controller.theme,
+      // 墨水屏下切主题也别做渐变，省一次全屏刷新。
+      themeAnimationDuration: einkMode
+          ? Duration.zero
+          : kThemeAnimationDuration,
       home: AppShell(controller: widget.controller, weread: widget.weread),
       builder: (context, child) => Stack(
         children: [
@@ -319,7 +451,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           ],
         ),
         actions: [
-          if (c.selectedTab == 1 && c.loggedIn)
+          if (c.selectedTab == 2 && c.loggedIn)
             IconButton(
               tooltip: '刷新历史',
               icon: const Icon(Icons.refresh),
@@ -359,6 +491,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           index: c.selectedTab,
           children: [
             SearchScreen(controller: c, weread: widget.weread),
+            BooklistsScreen(controller: c),
             HistoryScreen(controller: c),
             _wereadVisited
                 ? WereadScreen(controller: widget.weread)
@@ -379,7 +512,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         selectedIndex: c.selectedTab,
         onDestinationSelected: (index) {
-          if (index == 2 && !_wereadVisited) {
+          if (index == 3 && !_wereadVisited) {
             setState(() => _wereadVisited = true);
           }
           c.setTab(index);
@@ -389,6 +522,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
             icon: Icon(Icons.menu_book_outlined),
             selectedIcon: Icon(Icons.menu_book_rounded),
             label: '首页',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.collections_bookmark_outlined),
+            selectedIcon: Icon(Icons.collections_bookmark_rounded),
+            label: '书单',
           ),
           const NavigationDestination(
             icon: Icon(Icons.history_outlined),

@@ -1,7 +1,7 @@
-import 'package:xlib/controller.dart';
-import 'package:xlib/domain.dart';
-import 'package:xlib/screens.dart';
-import 'package:xlib/preview_loader.dart';
+import 'package:bookisle/controller.dart';
+import 'package:bookisle/domain.dart';
+import 'package:bookisle/screens.dart';
+import 'package:bookisle/preview_loader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

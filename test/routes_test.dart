@@ -1,7 +1,7 @@
-import 'package:xlib/api.dart';
-import 'package:xlib/controller.dart';
-import 'package:xlib/domain.dart';
-import 'package:xlib/native.dart';
+import 'package:bookisle/api.dart';
+import 'package:bookisle/controller.dart';
+import 'package:bookisle/domain.dart';
+import 'package:bookisle/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class ProbeApi extends LibraryApi {

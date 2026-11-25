@@ -6,9 +6,13 @@ import 'controller.dart';
 import 'domain.dart';
 import 'native.dart';
 import 'preview_loader.dart';
+import 'author_page.dart';
+import 'tip_page.dart';
+import 'reviews_page.dart';
 import 'update.dart';
 import 'weread/weread_controller.dart';
 import 'weread/weread_screens.dart';
+import 'webview_page.dart';
 import 'widgets.dart';
 
 const String kReadingClubUrl = 'https://qm.qq.com/q/lGu49c8YDY';
@@ -529,7 +533,7 @@ class _SearchPageState extends State<SearchPage> {
 
   void _goWeread() {
     Navigator.of(context).pop();
-    widget.controller.setTab(2);
+    widget.controller.setTab(3);
   }
 
   @override
@@ -1338,6 +1342,960 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 }
 
+/// 社区书单：公共 / 最喜欢的 / 我的，三栏分开。
+class BooklistsScreen extends StatefulWidget {
+  final ReaderController controller;
+  const BooklistsScreen({super.key, required this.controller});
+  @override
+  State<BooklistsScreen> createState() => _BooklistsScreenState();
+}
+
+class _BooklistsScreenState extends State<BooklistsScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs = TabController(length: 3, vsync: this);
+  final _searchInput = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      widget.controller.loadBooklists();
+      widget.controller.loadMyBooklists();
+      widget.controller.loadFavoriteBooklists();
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    _searchInput.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller;
+    return AnimatedBuilder(
+      animation: c,
+      builder: (context, _) {
+        if (!c.loggedIn) {
+          return ListView(
+            padding: const EdgeInsets.all(14),
+            children: [
+              EmptyState(
+                icon: Icons.collections_bookmark_outlined,
+                title: '请先登录',
+                message: '登录后可浏览社区书单。',
+                action: '去登录',
+                onAction: () => showLogin(context, c),
+              ),
+            ],
+          );
+        }
+        return Column(
+          children: [
+            TabBar(
+              controller: _tabs,
+              tabs: const [
+                Tab(text: '公共书单'),
+                Tab(text: '最喜欢的'),
+                Tab(text: '我的书单'),
+              ],
+            ),
+            Expanded(
+              child: TabBarView(
+                controller: _tabs,
+                children: [
+                  _PublicBooklists(controller: c, searchInput: _searchInput),
+                  _FavoriteBooklists(controller: c),
+                  _MyBooklists(controller: c),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// 公共书单：搜索框 + 排序/语言吸顶，下面按列表展示。
+class _PublicBooklists extends StatefulWidget {
+  final ReaderController controller;
+  final TextEditingController searchInput;
+  const _PublicBooklists({required this.controller, required this.searchInput});
+
+  @override
+  State<_PublicBooklists> createState() => _PublicBooklistsState();
+}
+
+class _PublicBooklistsState extends State<_PublicBooklists> {
+  String _sort = '';
+  String _lang = '';
+  final _scroll = ScrollController();
+  bool _showTop = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scroll.removeListener(_onScroll);
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final show = _scroll.hasClients && _scroll.offset > 280;
+    if (show != _showTop) setState(() => _showTop = show);
+  }
+
+  void _toTop() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  Future<void> _reload({String? query}) {
+    return widget.controller.loadBooklists(
+      query: query ?? widget.searchInput.text,
+      type: _sort,
+      languages: _lang,
+    );
+  }
+
+  Future<void> _more() async {
+    final page = widget.controller.booklistPage;
+    if (page == null) return;
+    final before = page.lists.length;
+    await widget.controller.loadBooklists(
+      query: widget.searchInput.text,
+      type: _sort,
+      languages: _lang,
+      page: page.page + 1,
+      append: true,
+    );
+    final after = widget.controller.booklistPage?.lists.length ?? before;
+    if (after == before) widget.controller.say('没有更多书单了');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller;
+    final page = c.booklistPage;
+    return Stack(
+      children: [
+        RefreshIndicator(
+          onRefresh: _reload,
+          child: CustomScrollView(
+            controller: _scroll,
+            slivers: [
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: _PinnedHeader(
+                  height: 104,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 6, 14, 4),
+                    child: Column(
+                      children: [
+                        TextField(
+                          controller: widget.searchInput,
+                          textInputAction: TextInputAction.search,
+                          decoration: InputDecoration(
+                            hintText: '搜索书单名称、标题或描述',
+                            prefixIcon: const Icon(Icons.search, size: 20),
+                            suffixIcon: widget.searchInput.text.isEmpty
+                                ? null
+                                : IconButton(
+                                    icon: const Icon(Icons.close, size: 18),
+                                    onPressed: () {
+                                      widget.searchInput.clear();
+                                      _reload(query: '');
+                                    },
+                                  ),
+                            isDense: true,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                          ),
+                          onSubmitted: (value) => _reload(query: value),
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            _BooklistDropdown(
+                              value: _sort,
+                              hint: '最受欢迎',
+                              items: const [
+                                ('', '最受欢迎'),
+                                ('new', '最新'),
+                                ('recent', '最近更新'),
+                                ('best', '最佳匹配'),
+                              ],
+                              onChanged: (value) {
+                                setState(() => _sort = value);
+                                _reload();
+                              },
+                            ),
+                            const SizedBox(width: 10),
+                            _BooklistDropdown(
+                              value: _lang,
+                              hint: '选择语言',
+                              items: const [
+                                ('', '全部语言'),
+                                ('english', '英文'),
+                                ('chinese', '中文'),
+                                ('japanese', '日语'),
+                              ],
+                              onChanged: (value) {
+                                setState(() => _lang = value);
+                                _reload();
+                              },
+                            ),
+                            const Spacer(),
+                            if (c.booklistsLoading)
+                              const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              if (c.booklistsError.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: ErrorPanel(
+                      message: c.booklistsError,
+                      onRetry: _reload,
+                    ),
+                  ),
+                )
+              else if (page == null && c.booklistsLoading)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 60),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                )
+              else if (page == null || page.lists.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.all(14),
+                    child: EmptyState(
+                      icon: Icons.collections_bookmark_outlined,
+                      title: '没有找到书单',
+                      message: '换个关键词试试，或者下拉刷新。',
+                    ),
+                  ),
+                )
+              else ...[
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) => Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
+                      child: _BooklistCard(
+                        list: page.lists[index],
+                        controller: c,
+                      ),
+                    ),
+                    childCount: page.lists.length,
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 20),
+                    child: OutlinedButton(
+                      onPressed: c.booklistsLoading ? null : _more,
+                      child: Text(c.booklistsLoading ? '加载中…' : '显示更多'),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: ScrollQuickActions(
+            visible: _showTop,
+            tag: 'booklists-public',
+            onTop: _toTop,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 书单页的小下拉（排序 / 语言）。
+class _BooklistDropdown extends StatelessWidget {
+  final String value;
+  final String hint;
+  final List<(String, String)> items;
+  final void Function(String) onChanged;
+  const _BooklistDropdown({
+    required this.value,
+    required this.hint,
+    required this.items,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DropdownButton<String>(
+      value: value,
+      hint: Text(hint, style: const TextStyle(fontSize: 12)),
+      isDense: true,
+      underline: const SizedBox.shrink(),
+      style: theme.textTheme.bodySmall,
+      items: items
+          .map(
+            (item) => DropdownMenuItem(
+              value: item.$1,
+              child: Text(item.$2, style: const TextStyle(fontSize: 12)),
+            ),
+          )
+          .toList(),
+      onChanged: (v) => onChanged(v ?? ''),
+    );
+  }
+}
+
+/// 吸顶的搜索栏。
+class _PinnedHeader extends SliverPersistentHeaderDelegate {
+  final double height;
+  final Widget child;
+  const _PinnedHeader({required this.height, required this.child});
+
+  @override
+  double get minExtent => height;
+  @override
+  double get maxExtent => height;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(color: colors.surface, child: child);
+  }
+
+  @override
+  bool shouldRebuild(covariant _PinnedHeader oldDelegate) => true;
+}
+
+/// 最喜欢的书单（收藏）。
+class _FavoriteBooklists extends StatefulWidget {
+  final ReaderController controller;
+  const _FavoriteBooklists({required this.controller});
+
+  @override
+  State<_FavoriteBooklists> createState() => _FavoriteBooklistsState();
+}
+
+class _FavoriteBooklistsState extends State<_FavoriteBooklists> {
+  final _scroll = ScrollController();
+  bool _showTop = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scroll.removeListener(_onScroll);
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final show = _scroll.hasClients && _scroll.offset > 280;
+    if (show != _showTop) setState(() => _showTop = show);
+  }
+
+  void _toTop() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller;
+    final page = c.favoriteBooklistPage;
+    return Stack(
+      children: [
+        RefreshIndicator(
+          onRefresh: c.loadFavoriteBooklists,
+          child: ListView(
+            controller: _scroll,
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 20),
+            children: [
+              if (c.favoriteBooklistsLoading && page == null)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 40),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (page == null || page.lists.isEmpty)
+                const EmptyState(
+                  icon: Icons.favorite_border,
+                  title: '还没有喜欢的书单',
+                  message: '在公共书单里点卡片上的爱心，收藏的书单会出现在这里。',
+                )
+              else
+                ...page.lists.map(
+                  (list) => Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: _BooklistCard(list: list, controller: c),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: ScrollQuickActions(
+            visible: _showTop,
+            tag: 'booklists-fav',
+            onTop: _toTop,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 我的书单。
+class _MyBooklists extends StatefulWidget {
+  final ReaderController controller;
+  const _MyBooklists({required this.controller});
+
+  @override
+  State<_MyBooklists> createState() => _MyBooklistsState();
+}
+
+class _MyBooklistsState extends State<_MyBooklists> {
+  final _scroll = ScrollController();
+  bool _showTop = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scroll.removeListener(_onScroll);
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final show = _scroll.hasClients && _scroll.offset > 280;
+    if (show != _showTop) setState(() => _showTop = show);
+  }
+
+  void _toTop() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller;
+    final theme = Theme.of(context);
+    return Stack(
+      children: [
+        RefreshIndicator(
+          onRefresh: c.loadMyBooklists,
+          child: ListView(
+            controller: _scroll,
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 20),
+            children: [
+              Row(
+                children: [
+                  Text(
+                    '我的书单',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: () => _createBooklist(context, c),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('新建'),
+                  ),
+                ],
+              ),
+              if (c.myBooklistsLoading && c.myBooklistPage == null)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('加载中…'),
+                )
+              else if (c.myBooklistPage == null)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 6),
+                  child: Text('暂时读不到，下拉刷新试试。'),
+                )
+              else if (c.myBooklistPage!.lists.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    '还没有自己的书单。点右上角「新建」，或在官网个人主页创建，这里会自动同步。',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      height: 1.5,
+                    ),
+                  ),
+                )
+              else
+                ...c.myBooklistPage!.lists.map(
+                  (list) => Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: _BooklistCard(
+                      list: list,
+                      controller: c,
+                      onDelete: () => _confirmDelete(context, c, list),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: ScrollQuickActions(
+            visible: _showTop,
+            tag: 'booklists-mine',
+            onTop: _toTop,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _confirmDelete(
+    BuildContext context,
+    ReaderController c,
+    Booklist list,
+  ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: const Text('删除书单'),
+        content: Text('确定删除「${list.title}」？删除后无法恢复。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(d, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(d, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await c.deleteBooklist(list);
+    } catch (error) {
+      c.say('$error');
+    }
+  }
+
+  Future<void> _createBooklist(BuildContext context, ReaderController c) async {
+    final title = TextEditingController();
+    final desc = TextEditingController();
+    var isPrivate = false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => StatefulBuilder(
+        builder: (d, setDialogState) => AlertDialog(
+          title: const Text('新建书单'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: title,
+                autofocus: true,
+                maxLength: 120,
+                decoration: const InputDecoration(labelText: '标题'),
+              ),
+              TextField(
+                controller: desc,
+                maxLines: 3,
+                decoration: const InputDecoration(labelText: '描述（可选）'),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('私有书单'),
+                subtitle: const Text('只有自己可见'),
+                value: isPrivate,
+                onChanged: (v) => setDialogState(() => isPrivate = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(d, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(d, true),
+              child: const Text('创建'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final name = title.text.trim();
+    final text = desc.text.trim();
+    title.dispose();
+    desc.dispose();
+    if (ok != true || name.isEmpty) return;
+    try {
+      await c.createBooklist(
+        title: name,
+        description: text,
+        isPrivate: isPrivate,
+      );
+      c.say('书单「$name」已创建');
+    } catch (error) {
+      c.say('创建失败：$error');
+    }
+  }
+}
+
+class _BooklistCard extends StatelessWidget {
+  final Booklist list;
+  final ReaderController controller;
+  final VoidCallback? onDelete;
+  const _BooklistCard({
+    required this.list,
+    required this.controller,
+    this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(22),
+        onTap: () => Navigator.push<void>(
+          context,
+          MaterialPageRoute(
+            builder: (_) =>
+                BooklistBooksPage(controller: controller, list: list),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                list.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (list.description.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  list.description,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    height: 1.5,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 8),
+              if (list.covers.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 104,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: list.covers.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 6),
+                    itemBuilder: (context, i) => ClipRRect(
+                      borderRadius: BorderRadius.circular(5),
+                      child: Image.network(
+                        list.covers[i],
+                        width: 70,
+                        height: 104,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Container(
+                          width: 70,
+                          height: 104,
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          child: Icon(
+                            Icons.menu_book_outlined,
+                            size: 20,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+              if (list.author.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: InkWell(
+                    onTap: list.authorProfile.isEmpty
+                        ? null
+                        : () => Navigator.push<void>(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => WebViewPage(
+                                url: list.authorProfile.startsWith('http')
+                                    ? list.authorProfile
+                                    : '${controller.activeOrigin}${list.authorProfile}',
+                                title: list.author,
+                                session: controller.session,
+                              ),
+                            ),
+                          ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.person_outline,
+                          size: 13,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(width: 3),
+                        Flexible(
+                          child: Text(
+                            list.author,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              Row(
+                children: [
+                  Icon(
+                    Icons.menu_book_outlined,
+                    size: 14,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 3),
+                  Text('${list.quantity}', style: theme.textTheme.bodySmall),
+                  if (list.views.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Icon(
+                      Icons.visibility_outlined,
+                      size: 14,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 3),
+                    Text('${list.views}', style: theme.textTheme.bodySmall),
+                  ],
+                  if (list.comments > 0) ...[
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: () => Navigator.push<void>(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => WebViewPage(
+                            url: '${controller.activeOrigin}${list.href}',
+                            title: list.title,
+                            session: controller.session,
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.chat_bubble_outline,
+                            size: 14,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            '${list.comments}',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const Spacer(),
+                  if (onDelete != null)
+                    IconButton(
+                      tooltip: '删除书单',
+                      icon: const Icon(Icons.delete_outline, size: 18),
+                      onPressed: onDelete,
+                    ),
+                  IconButton(
+                    tooltip: '喜欢',
+                    icon: Icon(
+                      list.isFavorite ? Icons.favorite : Icons.favorite_border,
+                      size: 18,
+                      color: list.isFavorite
+                          ? Colors.redAccent
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    onPressed: () async {
+                      try {
+                        await controller.toggleFavorite(list);
+                      } catch (error) {
+                        controller.say('$error');
+                      }
+                    },
+                  ),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 某个书单里的书。
+class BooklistBooksPage extends StatefulWidget {
+  final ReaderController controller;
+  final Booklist list;
+  const BooklistBooksPage({
+    super.key,
+    required this.controller,
+    required this.list,
+  });
+  @override
+  State<BooklistBooksPage> createState() => _BooklistBooksPageState();
+}
+
+class _BooklistBooksPageState extends State<BooklistBooksPage> {
+  BookPage? _page;
+  bool _loading = false;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = '';
+    });
+    try {
+      final result = await widget.controller.booklistBooks(widget.list.href);
+      if (mounted) setState(() => _page = result);
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final books = _page?.books ?? const <Book>[];
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.list.title)),
+      body: SafeArea(
+        child: _loading && books.isEmpty
+            ? const Center(child: CircularProgressIndicator())
+            : _error.isNotEmpty
+            ? ListView(
+                padding: const EdgeInsets.all(14),
+                children: [ErrorPanel(message: _error, onRetry: _load)],
+              )
+            : ListView(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 20),
+                children: [
+                  if (widget.list.description.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 14),
+                      child: Text(
+                        widget.list.description,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          height: 1.6,
+                        ),
+                      ),
+                    ),
+                  if (books.isEmpty)
+                    const EmptyState(
+                      icon: Icons.menu_book_outlined,
+                      title: '这个书单还没有书',
+                      message: '换个书单看看。',
+                    )
+                  else
+                    ...books.map(
+                      (book) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: BookTile(
+                          book,
+                          onTap: () =>
+                              showBookDetails(context, widget.controller, book),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
 class DownloadTile extends StatelessWidget {
   final DownloadRecord item;
   final ReaderController controller;
@@ -1521,7 +2479,7 @@ class ProfileScreen extends StatelessWidget {
   }
 
   Map<String, String> _avatarHeaders(ReaderController c, String url) {
-    final headers = <String, String>{'User-Agent': 'Mozilla/5.0 xlib-android'};
+    final headers = <String, String>{'User-Agent': 'Mozilla/5.0 z-lib-android'};
     final session = c.session;
     if (session == null) return headers;
     try {
@@ -1772,6 +2730,22 @@ class ProfileScreen extends StatelessWidget {
                 onTap: () =>
                     guarded(context, () => c.native.openUrl(kReadingClubUrl)),
               ),
+              const Divider(),
+              ListTile(
+                minTileHeight: 56,
+                dense: false,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                leading: const Icon(Icons.coffee_outlined),
+                title: const Text('回血'),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () {
+                  final navigator = Navigator.of(context);
+                  navigator.pop();
+                  navigator.push(
+                    MaterialPageRoute<void>(builder: (_) => const TipPage()),
+                  );
+                },
+              ),
             ],
           ),
         ),
@@ -1844,7 +2818,7 @@ class BookmarksPage extends StatelessWidget {
                                 ? (controller.bookmarksError.isNotEmpty
                                       ? '收藏同步失败：${controller.bookmarksError}\n下拉可重试'
                                       : '还没有收藏，可在书籍详情页点「收藏」添加')
-                                : '还没有收藏。登录后收藏会同步到你的书籍服务账号，换设备登录也能看到。',
+                                : '还没有收藏。登录后收藏会同步到你的 zlib 账号，换设备登录也能看到。',
                             textAlign: TextAlign.center,
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
@@ -1923,10 +2897,84 @@ class _BookDetailsSheetState extends State<BookDetailsSheet> {
   Future<void> load() async {
     try {
       book = await widget.controller.details(widget.initial);
+      // 详情接口内部可能因 hash 不匹配换了书的版本，评论数会丢。
+      // 这里用「详情返回的 hash」和「原始搜索结果的 hash」都试一次。
+      if (book.commentCount == 0) {
+        final hashes = <String>[
+          if (book.hash.isNotEmpty) book.hash,
+          if (widget.initial.hash.isNotEmpty &&
+              widget.initial.hash != book.hash)
+            widget.initial.hash,
+        ];
+        for (final h in hashes) {
+          try {
+            final probe = Book.fromJson({...book.toJson(), 'hash': h});
+            final c = await widget.controller.bookComments(probe);
+            if (c.total > 0) {
+              if (mounted) {
+                book = Book.fromJson({
+                  ...book.toJson(),
+                  'commentCount': c.total,
+                });
+              }
+              break;
+            }
+          } catch (_) {}
+        }
+      }
     } catch (e) {
       error = '$e';
     } finally {
       if (mounted) setState(() => loading = false);
+    }
+  }
+
+  /// 选择要加入的书单并加入（与「收藏」是两件事）。
+  Future<void> _addToBooklist(BuildContext context) async {
+    final c = widget.controller;
+    if (c.myBooklistPage == null) await c.loadMyBooklists();
+    if (!mounted) return;
+    final lists = c.myBooklistPage?.lists ?? const <Booklist>[];
+    if (lists.isEmpty) {
+      c.say('还没有书单，请先在「书单」页新建');
+      return;
+    }
+    final picked = await showModalBottomSheet<Booklist>(
+      context: context,
+      builder: (d) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                '选择要加入的书单',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: lists.length,
+                itemBuilder: (d, i) => ListTile(
+                  leading: const Icon(Icons.collections_bookmark_outlined),
+                  title: Text(lists[i].title),
+                  subtitle: lists[i].quantity > 0
+                      ? Text('${lists[i].quantity} 本')
+                      : null,
+                  onTap: () => Navigator.pop(d, lists[i]),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null) return;
+    try {
+      await c.addBookToBooklist(book, picked);
+    } catch (e) {
+      c.say('$e');
     }
   }
 
@@ -1997,11 +3045,145 @@ class _BookDetailsSheetState extends State<BookDetailsSheet> {
                         },
                       ),
                       const SizedBox(height: 8),
-                      Text(
-                        book.author.isEmpty ? '作者信息暂缺' : book.author,
-                        style: Theme.of(context).textTheme.titleMedium,
+                      InkWell(
+                        onTap: book.authorProfile.isEmpty
+                            ? null
+                            : () => Navigator.push<void>(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => AuthorPage(
+                                    controller: widget.controller,
+                                    author: book.author,
+                                    authorProfile: book.authorProfile,
+                                  ),
+                                ),
+                              ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              book.author.isEmpty ? '作者信息暂缺' : book.author,
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(
+                                    color: book.authorProfile.isEmpty
+                                        ? null
+                                        : Theme.of(context).colorScheme.primary,
+                                  ),
+                            ),
+                            if (book.authorProfile.isNotEmpty) ...[
+                              const SizedBox(width: 4),
+                              Icon(
+                                Icons.open_in_new,
+                                size: 13,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 8),
+                      // 书籍评价：点评分看评论；推荐/不推荐投票。
+                      Row(
+                        children: [
+                          InkWell(
+                            onTap: () => Navigator.push<void>(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ReviewsPage(
+                                  controller: widget.controller,
+                                  book: book,
+                                  commentCount: book.commentCount,
+                                ),
+                              ),
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.primary
+                                    .withValues(alpha: .08),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.star_rounded,
+                                    size: 15,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primary,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    // 评价（打分人数）与评论（文字条数）分开列出。
+                                    [
+                                      if (book.ratingCount > 0)
+                                        '${book.rating.toStringAsFixed(1)} · ${book.ratingCount} 人评价',
+                                      if (book.commentCount > 0)
+                                        '${book.commentCount} 条评论',
+                                      if (book.ratingCount == 0 &&
+                                          book.commentCount == 0)
+                                        '查看评论',
+                                    ].join(' · '),
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary,
+                                        ),
+                                  ),
+                                  const SizedBox(width: 2),
+                                  Icon(
+                                    Icons.chevron_right,
+                                    size: 14,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primary,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const Spacer(),
+                          if (book.id.isNotEmpty) ...[
+                            IconButton(
+                              tooltip: '推荐',
+                              icon: const Icon(
+                                Icons.thumb_up_alt_outlined,
+                                size: 18,
+                              ),
+                              onPressed: () => guarded(context, () async {
+                                await widget.controller.voteBook(book, 1);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('已推荐这本书')),
+                                  );
+                                }
+                              }),
+                            ),
+                            IconButton(
+                              tooltip: '不推荐',
+                              icon: const Icon(
+                                Icons.thumb_down_alt_outlined,
+                                size: 18,
+                              ),
+                              onPressed: () => guarded(context, () async {
+                                await widget.controller.voteBook(book, -1);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('已提交评价')),
+                                  );
+                                }
+                              }),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
                       Wrap(
                         spacing: 6,
                         children: [
@@ -2028,6 +3210,11 @@ class _BookDetailsSheetState extends State<BookDetailsSheet> {
                     }),
                     icon: Icon(saved ? Icons.bookmark : Icons.bookmark_border),
                   ),
+                  IconButton.outlined(
+                    tooltip: '加入书单',
+                    onPressed: () => _addToBooklist(context),
+                    icon: const Icon(Icons.playlist_add),
+                  ),
                   if (book.downloadable &&
                       {'EPUB', 'PDF'}.contains(book.extension))
                     OutlinedButton.icon(
@@ -2044,7 +3231,7 @@ class _BookDetailsSheetState extends State<BookDetailsSheet> {
                         Icons.chrome_reader_mode_outlined,
                         size: 18,
                       ),
-                      label: const Text('在线预览'),
+                      label: const Text('预览'),
                     ),
                   FilledButton.icon(
                     onPressed: () => guarded(context, () async {
@@ -2066,9 +3253,15 @@ class _BookDetailsSheetState extends State<BookDetailsSheet> {
                 return Row(
                   children: [
                     actions.first,
-                    for (final action in actions.skip(1)) ...[
+                    for (var i = 1; i < actions.length; i++) ...[
                       const SizedBox(width: 8),
-                      Expanded(child: SizedBox(height: 46, child: action)),
+                      // 第二个是「加入书单」，保持小圆按钮，不占满剩余宽度。
+                      if (i == 1)
+                        actions[i]
+                      else
+                        Expanded(
+                          child: SizedBox(height: 46, child: actions[i]),
+                        ),
                     ],
                   ],
                 );
@@ -3065,7 +4258,7 @@ class _SectionManagerSheetState extends State<SectionManagerSheet> {
   }
 }
 
-/// 版本历史页：列出 GitHub 上的发行版，含版本号、时间、更新说明、下载入口。
+/// 版本历史页：列出 Gitee 上的发行版，含版本号、时间、更新说明、下载入口。
 class ReleasesPage extends StatefulWidget {
   final ReaderController controller;
   const ReleasesPage({super.key, required this.controller});
@@ -3276,22 +4469,30 @@ class _ReleasesPageState extends State<ReleasesPage> {
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton.icon(
+                  child: OutlinedButton(
                     onPressed: () =>
                         guarded(context, () => c.native.openUrl(netdiskUrl)),
-                    icon: const Icon(Icons.cloud_download_outlined, size: 16),
-                    label: const Text('网盘'),
+                    child: const Text('网盘', maxLines: 1),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: OutlinedButton.icon(
+                  child: OutlinedButton(
                     onPressed: () => guarded(
                       context,
-                      () => c.native.openUrl(releasesPageUrl),
+                      () => c.native.openUrl(githubReleasesPage),
                     ),
-                    icon: const Icon(Icons.code, size: 16),
-                    label: const Text('GitHub'),
+                    child: const Text('GitHub', maxLines: 1),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => guarded(
+                      context,
+                      () => c.native.openUrl(giteeReleasesPage),
+                    ),
+                    child: const Text('Gitee', maxLines: 1),
                   ),
                 ),
               ],
@@ -3586,7 +4787,7 @@ Future<bool> installReleaseUpdate(
           title: const Text('没有适配的安装包'),
           content: Text(
             '这个版本没有适配你手机（${abis.join(' / ')}）的安装包，'
-            '请用「网盘下载」或「GitHub 下载」手动安装。',
+            '请用「网盘下载」或「Gitee 下载」手动安装。',
           ),
           actions: [
             TextButton(
@@ -3657,9 +4858,9 @@ class _UpdatePromptState extends State<UpdatePrompt> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () => _open(widget.release.releaseUrl),
+                    onPressed: () => _open(widget.release.giteeUrl),
                     icon: const Icon(Icons.code, size: 16),
-                    label: const Text('GitHub'),
+                    label: const Text('Gitee'),
                   ),
                 ),
               ],

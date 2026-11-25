@@ -1,16 +1,23 @@
 import 'dart:convert';
 import 'dart:io';
 
-/// GitHub 仓库信息（仓库已公开，可匿名访问）。
-const releaseRepo = 'KingPenguinMan/xlib-android';
-const releasesApiUrl = 'https://api.github.com/repos/$releaseRepo/releases';
-const releasesPageUrl = 'https://github.com/$releaseRepo/releases';
+import 'eink.dart';
+
+/// 本分支是 GitHub 分发渠道，更新源指向 GitHub 发行版。
+/// 变量名沿用 gitee* 以兼容其他文件的引用，实际地址为 GitHub。
+const giteeRepo = 'KingPenguinMan/xlib-android';
+const giteeReleasesUrl = 'https://api.github.com/repos/$giteeRepo/releases';
+const giteeReleasesPage = 'https://github.com/$giteeRepo/releases';
+
+/// GitHub 仓库的发行页入口。
+const githubReleasesPage =
+    'https://github.com/KingPenguinMan/xlib-android/releases';
 
 /// 蓝奏云网盘下载入口（固定地址 + 密码）。
 const netdiskUrl = 'https://wward.lanzouw.com/b01i60kfsf';
-const netdiskPassword = 'zlib';
+const netdiskPassword = 'xlib';
 
-/// 一个应用版本，对应 GitHub 上的一个 release（发行版）。
+/// 一个应用版本，对应 Gitee 上的一个 release（发行版）。
 class AppRelease {
   final String version; // 去掉 v 前缀，如 0.1.2
   final String tag; // 原始 tag，如 v0.1.2
@@ -35,13 +42,28 @@ class AppRelease {
   factory AppRelease.fromJson(Map<String, dynamic> json) {
     final tag = '${json['tag_name'] ?? ''}';
     // 从发行版附件里找各架构的 APK（文件名形如 xxx-arm64-v8a.apk）。
+    // 普通版与墨水屏版是两套包，文件名只差 `-kindle-`，
+    // 架构后缀完全相同，因此必须按当前构建类型挑选，
+    // 否则两套包会互相覆盖，普通版会下载到墨水屏包。
     final apks = <String, String>{};
+    final fallback = <String, String>{};
     for (final asset in (json['assets'] as List? ?? []).whereType<Map>()) {
       final name = '${asset['name'] ?? ''}';
       final url = '${asset['browser_download_url'] ?? ''}';
       final match = RegExp(r'-(arm64-v8a|armeabi-v7a|x86_64)\.apk$')
           .firstMatch(name);
-      if (match != null && url.isNotEmpty) apks[match.group(1)!] = url;
+      if (match == null || url.isEmpty) continue;
+      final abi = match.group(1)!;
+      final isKindle = name.contains('-kindle-');
+      if (isKindle == einkMode) {
+        apks[abi] = url;
+      } else {
+        // 另一种类型的包只作兜底（早期版本没有墨水屏包）。
+        fallback.putIfAbsent(abi, () => url);
+      }
+    }
+    for (final entry in fallback.entries) {
+      apks.putIfAbsent(entry.key, () => entry.value);
     }
     return AppRelease(
       version: tag.replaceFirst(RegExp('^v'), ''),
@@ -72,9 +94,9 @@ class AppRelease {
     return null;
   }
 
-  /// GitHub releases 页面上精准跳到这个版本的锚点链接。
+  /// Gitee releases 页面上精准跳到这个版本的锚点链接。
   /// 每次发新版 tag 会变，链接也会跟着变（#release-v{tag}）。
-  String get releaseUrl => '$releasesPageUrl/tag/$tag';
+  String get giteeUrl => '$giteeReleasesPage#release-$tag';
 }
 
 /// 三段式版本号比较：candidate 是否严格比 installed 新。
@@ -90,14 +112,14 @@ bool isNewerVersion(String candidate, String installed) {
   return false;
 }
 
-/// 拉取 GitHub 上全部 release，最新在前。
+/// 拉取 Gitee 上全部 release，最新在前。
 Future<List<AppRelease>> fetchReleases() async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
   try {
     final req = await client.getUrl(
-      Uri.parse('$releasesApiUrl?per_page=100'),
+      Uri.parse('$giteeReleasesUrl?per_page=100&direction=desc'),
     );
-    req.headers.set(HttpHeaders.userAgentHeader, 'xlib-android');
+    req.headers.set(HttpHeaders.userAgentHeader, 'z-lib-android');
     final response = await req.close();
     if (response.statusCode != 200) return const [];
     final decoded = jsonDecode(await utf8.decoder.bind(response).join());
@@ -105,7 +127,7 @@ Future<List<AppRelease>> fetchReleases() async {
     return decoded
         .whereType<Map>()
         .map((e) => AppRelease.fromJson(Map<String, dynamic>.from(e)))
-        .where((r) => RegExp(r'^v\d+\.\d+\.\d+$').hasMatch(r.tag) && !r.draft && !r.prerelease)
+        .where((r) => r.tag.isNotEmpty)
         .toList();
   } catch (_) {
     return const [];

@@ -6,6 +6,9 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+
+import '../webview_page.dart';
+
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../native.dart';
@@ -468,16 +471,40 @@ class WereadResultTile extends StatelessWidget {
                     style: theme.textTheme.titleMedium,
                   ),
                   const SizedBox(height: 3),
-                  Text(
-                    [
-                      if ((info.author ?? '').isNotEmpty) info.author!,
-                      if ((info.category ?? '').isNotEmpty) info.category!,
-                    ].join(' · '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: colors.onSurfaceVariant,
-                    ),
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if ((info.author ?? '').isNotEmpty)
+                        GestureDetector(
+                          onTap: () => Navigator.push<void>(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => WebViewPage(
+                                url:
+                                    'https://weread.qq.com/web/search/books?keyword=${Uri.encodeComponent(info.author!)}',
+                                title: info.author ?? '',
+                              ),
+                            ),
+                          ),
+                          child: Text(
+                            info.author!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colors.primary,
+                            ),
+                          ),
+                        ),
+                      if ((info.category ?? '').isNotEmpty)
+                        Text(
+                          '${(info.author ?? '').isNotEmpty ? ' · ' : ''}${info.category}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 6),
                   Row(
